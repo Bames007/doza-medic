@@ -1,3 +1,4 @@
+// app/registration/components/PersonalInfo.tsx
 "use client";
 
 import React from "react";
@@ -5,14 +6,17 @@ import {
   User,
   Mail,
   Phone,
-  Calendar,
   Lock as LockIcon,
   ChevronRight,
   ChevronLeft,
+  Check,
+  AlertCircle,
 } from "lucide-react";
 
 import { MedicRegistrationData } from "../../type/registration_type";
 import { bebasNeue, poppins } from "@/app/utils/constants";
+import DatePicker from "@/app/components/CustomDatePicker";
+import Select from "@/app/components/CustomSelect";
 
 interface PersonalInfoProps {
   formData: MedicRegistrationData;
@@ -22,7 +26,15 @@ interface PersonalInfoProps {
 }
 
 const inputBase =
-  "w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-500 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all text-sm sm:text-base";
+  "w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all text-sm sm:text-base";
+
+const GENDER_OPTIONS = [
+  { value: "Male", label: "Male" },
+  { value: "Female", label: "Female" },
+  { value: "Other", label: "Other" },
+];
+
+const MIN_PASSWORD_LENGTH = 8;
 
 const PersonalInfo: React.FC<PersonalInfoProps> = ({
   formData,
@@ -30,18 +42,50 @@ const PersonalInfo: React.FC<PersonalInfoProps> = ({
   onBack,
   onNext,
 }) => {
+  const info = formData.personalInfo;
+
   const handleInputChange = (
     field: keyof typeof formData.personalInfo,
     value: string,
   ) => {
     updateFormData({
-      personalInfo: { ...formData.personalInfo, [field]: value },
+      personalInfo: { ...info, [field]: value },
     });
   };
 
-  const isFormValid = Object.values(formData.personalInfo).every(
-    (val) => val !== "" && val !== null,
-  );
+  // ── Validation, step by step ───────────────────────────────────
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  const checks = {
+    firstName: info.firstName.trim().length >= 2,
+    lastName: info.lastName.trim().length >= 2,
+    email: emailRegex.test(info.email.trim()),
+    password:
+      typeof info.password === "string" &&
+      info.password.length >= MIN_PASSWORD_LENGTH,
+    phone: info.phone.trim().length >= 7,
+    gender: info.gender.trim() !== "",
+    // Optional — never gates Continue, no badge
+    dateOfBirth: true,
+  };
+
+  const isFormValid =
+    checks.firstName &&
+    checks.lastName &&
+    checks.email &&
+    checks.password &&
+    checks.phone &&
+    checks.gender;
+
+  const emailError =
+    info.email.trim() !== "" && !checks.email
+      ? "Please enter a valid email"
+      : "";
+
+  const passwordError =
+    info.password !== "" && !checks.password
+      ? `At least ${MIN_PASSWORD_LENGTH} characters`
+      : "";
 
   return (
     <div
@@ -71,7 +115,7 @@ const PersonalInfo: React.FC<PersonalInfoProps> = ({
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
-        {/* Left Column: Avatar (uploads disabled) */}
+        {/* Avatar — disabled, no validation */}
         <div className="md:col-span-1">
           <div className="bg-slate-50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-100 flex flex-col items-center text-center">
             <div
@@ -92,29 +136,29 @@ const PersonalInfo: React.FC<PersonalInfoProps> = ({
           </div>
         </div>
 
-        {/* Right Column: Form Fields */}
+        {/* Form fields */}
         <div className="md:col-span-2 space-y-5 sm:space-y-6">
           {/* Names */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-bold text-slate-900 mb-2">
+              <FieldLabel ok={checks.firstName} required>
                 First Name
-              </label>
+              </FieldLabel>
               <input
                 type="text"
-                value={formData.personalInfo.firstName}
+                value={info.firstName}
                 onChange={(e) => handleInputChange("firstName", e.target.value)}
                 className={inputBase}
                 placeholder="John"
               />
             </div>
             <div>
-              <label className="block text-sm font-bold text-slate-900 mb-2">
+              <FieldLabel ok={checks.lastName} required>
                 Last Name
-              </label>
+              </FieldLabel>
               <input
                 type="text"
-                value={formData.personalInfo.lastName}
+                value={info.lastName}
                 onChange={(e) => handleInputChange("lastName", e.target.value)}
                 className={inputBase}
                 placeholder="Doe"
@@ -125,101 +169,115 @@ const PersonalInfo: React.FC<PersonalInfoProps> = ({
           {/* Email & Password */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-bold text-slate-900 mb-2">
+              <FieldLabel ok={checks.email} required>
                 Email Address
-              </label>
+              </FieldLabel>
               <div className="relative">
                 <Mail
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
                   size={18}
                 />
                 <input
                   type="email"
-                  value={formData.personalInfo.email}
+                  value={info.email}
                   onChange={(e) => handleInputChange("email", e.target.value)}
-                  className={`${inputBase} pl-10`}
+                  className={`${inputBase} pl-10 ${
+                    emailError
+                      ? "border-rose-300 focus:border-rose-500 focus:ring-rose-500/10"
+                      : ""
+                  }`}
                   placeholder="john@hospital.com"
                 />
               </div>
+              {emailError && (
+                <p className="flex items-center gap-1.5 text-xs text-rose-500 mt-1.5">
+                  <AlertCircle size={12} /> {emailError}
+                </p>
+              )}
             </div>
             <div>
-              <label className="block text-sm font-bold text-slate-900 mb-2">
+              <FieldLabel ok={checks.password} required>
                 Password
-              </label>
+              </FieldLabel>
               <div className="relative">
                 <LockIcon
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
                   size={18}
                 />
                 <input
                   type="password"
-                  value={formData.personalInfo.password}
+                  value={info.password}
                   onChange={(e) =>
                     handleInputChange("password", e.target.value)
                   }
-                  className={`${inputBase} pl-10`}
+                  className={`${inputBase} pl-10 ${
+                    passwordError
+                      ? "border-rose-300 focus:border-rose-500 focus:ring-rose-500/10"
+                      : ""
+                  }`}
                   placeholder="••••••••"
                 />
               </div>
+              {passwordError ? (
+                <p className="flex items-center gap-1.5 text-xs text-rose-500 mt-1.5">
+                  <AlertCircle size={12} /> {passwordError}
+                </p>
+              ) : (
+                !checks.password && (
+                  <Hint>Use at least {MIN_PASSWORD_LENGTH} characters.</Hint>
+                )
+              )}
             </div>
           </div>
 
           {/* Phone & DOB */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-bold text-slate-900 mb-2">
+              <FieldLabel ok={checks.phone} required>
                 Phone Number
-              </label>
+              </FieldLabel>
               <div className="relative">
                 <Phone
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
                   size={18}
                 />
                 <input
                   type="tel"
-                  value={formData.personalInfo.phone}
+                  value={info.phone}
                   onChange={(e) => handleInputChange("phone", e.target.value)}
                   className={`${inputBase} pl-10`}
-                  placeholder="+1 234 567 890"
+                  placeholder="+234 800 000 0000"
                 />
               </div>
             </div>
+            {/* Date of Birth — optional, no badge */}
             <div>
-              <label className="block text-sm font-bold text-slate-900 mb-2">
+              <label className="flex items-center gap-2 text-sm font-bold text-slate-900 mb-2">
                 Date of Birth
+                <span className="text-slate-400 font-normal">(optional)</span>
               </label>
-              <div className="relative">
-                <Calendar
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"
-                  size={18}
-                />
-                <input
-                  type="date"
-                  value={formData.personalInfo.dateOfBirth}
-                  onChange={(e) =>
-                    handleInputChange("dateOfBirth", e.target.value)
-                  }
-                  className={`${inputBase} pl-10`}
-                />
-              </div>
+              <DatePicker
+                value={info.dateOfBirth ?? ""}
+                onChange={(v) => handleInputChange("dateOfBirth", v)}
+                placeholder="Select date"
+                maxDate={new Date()}
+              />
             </div>
           </div>
 
-          {/* Gender */}
+          {/* Gender — custom select, Done/Required badge */}
           <div>
-            <label className="block text-sm font-bold text-slate-900 mb-2">
+            <FieldLabel ok={checks.gender} required>
               Gender
-            </label>
-            <select
-              value={formData.personalInfo.gender}
-              onChange={(e) => handleInputChange("gender", e.target.value)}
-              className={`${inputBase} appearance-none`}
-            >
-              <option value="">Select...</option>
-              <option value="male">Male</option>
-              <option value="female">Female</option>
-              <option value="other">Other</option>
-            </select>
+            </FieldLabel>
+            <Select
+              value={info.gender}
+              onChange={(v) => handleInputChange("gender", v)}
+              options={GENDER_OPTIONS}
+              placeholder="Select…"
+              icon={User}
+            />
+            {!checks.gender && <Hint>Please select your gender.</Hint>}
           </div>
         </div>
       </div>
@@ -227,13 +285,15 @@ const PersonalInfo: React.FC<PersonalInfoProps> = ({
       {/* Footer Navigation */}
       <div className="flex justify-between items-center gap-3 mt-8 sm:mt-12 pt-6 sm:pt-8 border-t border-slate-100">
         <button
+          type="button"
           onClick={onBack}
-          className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-3 rounded-xl font-bold text-slate-600 hover:text-slate-900 transition-colors text-sm sm:text-base"
+          className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-3 rounded-xl font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors text-sm sm:text-base"
         >
           <ChevronLeft size={20} />
           Back
         </button>
         <button
+          type="button"
           onClick={onNext}
           disabled={!isFormValid}
           className={`px-6 sm:px-10 py-3.5 sm:py-4 rounded-2xl font-bold transition-all flex items-center gap-2 sm:gap-3 shadow-lg text-sm sm:text-base ${
@@ -251,3 +311,38 @@ const PersonalInfo: React.FC<PersonalInfoProps> = ({
 };
 
 export default PersonalInfo;
+
+// ─── Small helpers (same as ProfessionalInfo / PracticeInfo) ───────
+function FieldLabel({
+  children,
+  ok,
+  required,
+}: {
+  children: React.ReactNode;
+  ok: boolean;
+  required?: boolean;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-sm font-bold text-slate-900 mb-2">
+      {children}
+      {required && (
+        <span
+          className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${
+            ok ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-500"
+          }`}
+        >
+          {ok ? <Check size={10} /> : <AlertCircle size={10} />}
+          {ok ? "Done" : "Required"}
+        </span>
+      )}
+    </label>
+  );
+}
+
+function Hint({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="flex items-center gap-1.5 text-xs text-emerald-700 mt-1.5">
+      <AlertCircle size={12} /> {children}
+    </p>
+  );
+}

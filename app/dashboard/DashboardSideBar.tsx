@@ -239,7 +239,14 @@ export default function MedicSidebar({ onMessagesToggle }: MedicSidebarProps) {
       <div className="p-6 pb-4">
         <div className="flex items-center gap-3 mb-5">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-200 bg-emerald-50">
-            <Image src="/logo.png" alt="Doza" width={22} height={22} />
+            <Image
+              src="/logo.png"
+              alt="Doza"
+              width={22}
+              height={22}
+              priority
+              style={{ width: "auto", height: "auto" }}
+            />
           </div>
           <span
             className={cn(

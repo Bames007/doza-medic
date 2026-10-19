@@ -11,6 +11,7 @@ import { RotateCw } from "lucide-react";
 import VerificationPanel from "./panels/VerificationPanel";
 import DashboardPanel from "./panels/DashboardPanel";
 import UpdateProfile from "./panels/ProfilePanel";
+import AppointmentsPanel from "./panels/AppointmentPanel";
 
 // import AppointmentsPanel from "./AppointmentsPanel";
 // import MessagesPanel from "./MessagesPanel";
@@ -73,7 +74,7 @@ export default function PanelRenderer() {
 
       case "appointments":
         // return <AppointmentsPanel />;
-        return <NotFoundPanel panel="appointments" />;
+        return <AppointmentsPanel />;
 
       case "messages":
         // return <MessagesPanel />;

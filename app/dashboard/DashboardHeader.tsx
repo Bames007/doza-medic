@@ -26,6 +26,39 @@ interface MedicHeaderProps {
   onMessagesToggle: () => void;
 }
 
+// ─── Role → abbreviated title ────────────────────────────────────
+// Keys must match `medicRoles` ids in app/registration/data/constant.ts
+// Anything not in this map → no prefix (just the name shows)
+const ROLE_TITLES: Record<string, string> = {
+  doctor: "Dr.",
+  physician: "Dr.",
+  medical_doctor: "Dr.",
+  dentist: "Dr.",
+  surgeon: "Dr.",
+  nurse: "Nrs.",
+  registered_nurse: "Nrs.",
+  pharmacist: "Pharm.",
+  pharmacy_technician: "Pharm.",
+  physiotherapist: "PT.",
+  physiotherapy: "PT.",
+  midwife: "Mw.",
+  lab_scientist: "LS.",
+  medical_lab_scientist: "LS.",
+  radiographer: "Rad.",
+  psychologist: "Psy.",
+  clinical_psychologist: "Psy.",
+  optometrist: "OD.",
+  speech_therapist: "SLP.",
+};
+
+const normalizeRoleKey = (role?: string | null): string =>
+  (role || "").toLowerCase().trim().replace(/\s+/g, "_");
+
+const getMedicTitle = (role?: string | null): string => {
+  const key = normalizeRoleKey(role);
+  return key ? (ROLE_TITLES[key] ?? "") : "";
+};
+
 // Route → display title
 const pathToPageName: Record<string, string> = {
   "/dashboard": "Dashboard",
@@ -67,10 +100,7 @@ const getShortGreeting = (hour: number): string => {
   return "Evening";
 };
 
-// ─── Role formatter ──────────────────────────────────────────────
-// Reads whichever field is populated on the medic object, then
-// humanizes it. Returns "" if nothing is available so we never show
-// a misleading fallback like "Practitioner".
+// ─── Role humanizer (for the subtitle, not the title) ────────────
 const resolveRole = (medic: MedicUser | null): string => {
   if (!medic) return "";
   const raw =
@@ -183,6 +213,18 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
   const greeting = getShortGreeting(now.getHours());
   const unreadCount = notifications.filter((n) => n.unread).length;
 
+  // ─── Title-aware names ────────────────────────────────────────
+  // getMedicTitle returns "" when the role isn't recognized, so we
+  // only show the prefix when it makes sense — no stray "Dr." on
+  // someone who isn't a doctor.
+  const medicTitle = getMedicTitle(medic?.professionalRole);
+  const nameWithTitle = (name: string) =>
+    medicTitle ? `${medicTitle} ${name}` : name;
+
+  const displayFirstName = nameWithTitle(firstName);
+  const displayFullName = nameWithTitle(medic?.fullName || firstName);
+  const displayMenuName = nameWithTitle(medic?.fullName || "Doza Medic");
+
   // ── Handlers ───────────────────────────────────────────────────
   const toggleNotifications = () => setIsNotificationsOpen((p) => !p);
   const toggleMenu = () => setIsMenuOpen((p) => !p);
@@ -232,7 +274,8 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
 
               <div className="min-w-0 flex-1">
                 <p className="text-[15px] font-bold text-slate-900 leading-tight truncate">
-                  {greeting} {firstName}
+                  {/* FIX: title-aware greeting */}
+                  {greeting} {displayFirstName}
                 </p>
                 <p className="text-[11px] text-slate-500 font-medium leading-snug truncate mt-0.5">
                   {displayRole ? `${displayRole} · ` : ""}
@@ -259,7 +302,7 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
               >
                 <Bell className="w-[18px] h-[18px] stroke-[2.2]" />
                 {unreadCount > 0 && (
-                  <span className="absolute top-2 right-2 w-1.5 h-1.5 bg-rose-500 rounded-full ring-2 ring-emerald-600" />
+                  <span className="absolute top-2 right-2 w-1.5 h-1.5 bg-white rounded-full ring-2 ring-emerald-600" />
                 )}
               </button>
             </div>
@@ -302,7 +345,8 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="font-bold text-slate-900 text-lg truncate">
-                      {medic?.fullName || firstName}
+                      {/* FIX: title-aware full name */}
+                      {displayFullName}
                     </p>
                     {displayRole && (
                       <p className="text-xs text-slate-500 capitalize">
@@ -573,8 +617,9 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
                 )}
               </div>
               <div className="hidden md:block text-left">
+                {/* FIX: title-aware first name */}
                 <p className="text-sm font-semibold text-slate-900 leading-tight">
-                  {firstName}
+                  {displayFirstName}
                 </p>
                 {displayRole && (
                   <p className="text-[10px] text-slate-400 leading-tight capitalize">
@@ -609,7 +654,8 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-slate-900 truncate">
-                          {medic?.fullName || "Doza Medic"}
+                          {/* FIX: title-aware full name */}
+                          {displayMenuName}
                         </p>
                         <p className="text-xs text-slate-400 truncate">
                           {medic?.email || ""}

@@ -202,7 +202,7 @@ const MedicLoginPage: React.FC = () => {
 
   const handleGetHelp = () => {
     window.location.href =
-      "mailto:support@doza.com?subject=Medic%20Login%20Assistance&body=Please%20help%20me%20access%20my%20Doza%20Medic%20account.";
+      "mailto:dozamedichq@gmail.com?subject=Medic%20Login%20Assistance&body=Please%20help%20me%20access%20my%20Doza%20Medic%20account.";
   };
 
   return (
@@ -233,6 +233,8 @@ const MedicLoginPage: React.FC = () => {
                     alt="Doza Logo"
                     width={28}
                     height={28}
+                    priority
+                    style={{ width: "auto", height: "auto" }}
                   />
                 </div>
                 <span
@@ -277,6 +279,8 @@ const MedicLoginPage: React.FC = () => {
                     alt="Doza Logo"
                     width={32}
                     height={32}
+                    priority
+                    style={{ width: "auto", height: "auto" }}
                   />
                   <span
                     className={`text-2xl font-bold text-slate-900 ${bebasNeue.className}`}
@@ -436,7 +440,10 @@ const MedicLoginPage: React.FC = () => {
 
                 <div className="mt-8 pt-8 border-t border-slate-100 flex items-center justify-center gap-6">
                   <button
-                    onClick={() => router.push("/register")}
+                    onClick={() => {
+                      window.location.href =
+                        "https://dozamedic.com/registration/medic";
+                    }}
                     className="text-[10px] font-black text-emerald-500 hover:text-emerald-700 uppercase tracking-[0.2em] transition-colors"
                   >
                     Register as Medic

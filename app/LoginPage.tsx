@@ -204,12 +204,14 @@ const LoginPage: React.FC = () => {
                     alt="Doza Logo"
                     width={28}
                     height={28}
+                    priority
+                    style={{ width: "auto", height: "auto" }}
                   />
                 </div>
                 <span
                   className={`text-2xl tracking-tighter font-bold text-white ${bebasNeue.className}`}
                 >
-                  DOZA
+                  DOZA MEDIC
                 </span>
               </div>
 
@@ -252,6 +254,8 @@ const LoginPage: React.FC = () => {
                     alt="Doza Logo"
                     width={32}
                     height={32}
+                    priority
+                    style={{ width: "auto", height: "auto" }}
                   />
                   <span
                     className={`text-2xl font-bold text-slate-900 ${bebasNeue.className}`}

@@ -1,3 +1,4 @@
+// app/registration/components/ProfessionalInfo.tsx
 "use client";
 
 import React, { useState } from "react";
@@ -8,6 +9,9 @@ import {
   ChevronRight,
   ChevronLeft,
   GraduationCap,
+  Check,
+  AlertCircle,
+  ChevronDown,
 } from "lucide-react";
 
 import { MedicRegistrationData } from "../../type/registration_type";
@@ -22,7 +26,7 @@ interface ProfessionalInfoProps {
 }
 
 const inputBase =
-  "w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-500 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all text-sm sm:text-base";
+  "w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all text-sm sm:text-base";
 
 const ProfessionalInfo: React.FC<ProfessionalInfoProps> = ({
   formData,
@@ -32,50 +36,78 @@ const ProfessionalInfo: React.FC<ProfessionalInfoProps> = ({
 }) => {
   const [newQualification, setNewQualification] = useState("");
 
-  const selectedRole = medicRoles.find(
-    (role) => role.id === formData.professionalInfo.role,
-  );
+  const info = formData.professionalInfo;
+  const specialties = info.specialties ?? [];
+  const qualifications = info.qualifications ?? [];
 
-  const handleSpecialtyToggle = (specialty: string) => {
-    const currentSpecialties = formData.professionalInfo.specialties;
-    const updatedSpecialties = currentSpecialties.includes(specialty)
-      ? currentSpecialties.filter((s) => s !== specialty)
-      : [...currentSpecialties, specialty];
+  const selectedRole = medicRoles.find((role) => role.id === info.role);
+  const hasPresetSpecialties =
+    selectedRole && selectedRole.specialties.length > 0;
 
+  // ── Handlers ───────────────────────────────────────────────────
+  const handleRoleChange = (roleId: string) => {
     updateFormData({
       professionalInfo: {
-        ...formData.professionalInfo,
-        specialties: updatedSpecialties,
+        ...info,
+        role: roleId,
+        // Reset specialty when role changes so stale picks don't linger
+        specialties: [],
+        customSpecialty: "",
       },
     });
   };
 
+  const handleSpecialtyToggle = (specialty: string) => {
+    const updated = specialties.includes(specialty)
+      ? specialties.filter((s) => s !== specialty)
+      : [...specialties, specialty];
+    updateFormData({
+      professionalInfo: { ...info, specialties: updated },
+    });
+  };
+
   const addQualification = () => {
-    if (
-      newQualification.trim() &&
-      !formData.professionalInfo.qualifications.includes(
-        newQualification.trim(),
-      )
-    ) {
-      updateFormData({
-        professionalInfo: {
-          ...formData.professionalInfo,
-          qualifications: [
-            ...formData.professionalInfo.qualifications,
-            newQualification.trim(),
-          ],
-        },
-      });
-      setNewQualification("");
-    }
+    const trimmed = newQualification.trim();
+    if (!trimmed || qualifications.includes(trimmed)) return;
+    updateFormData({
+      professionalInfo: {
+        ...info,
+        qualifications: [...qualifications, trimmed],
+      },
+    });
+    setNewQualification("");
+  };
+
+  const removeQualification = (q: string) => {
+    updateFormData({
+      professionalInfo: {
+        ...info,
+        qualifications: qualifications.filter((x) => x !== q),
+      },
+    });
+  };
+
+  // ── Validation ─────────────────────────────────────────────────
+  const checks = {
+    role: info.role.trim() !== "",
+    license: info.licenseNumber.trim() !== "",
+    // 0 years is valid for fresh graduates; only reject negative
+    experience:
+      typeof info.yearsOfExperience === "number" &&
+      info.yearsOfExperience >= 0 &&
+      info.yearsOfExperience < 100,
+    specialty: hasPresetSpecialties
+      ? specialties.length > 0
+      : info.customSpecialty.trim() !== "",
+    qualification: qualifications.length > 0,
   };
 
   const isFormValid =
-    formData.professionalInfo.licenseNumber.trim() !== "" &&
-    formData.professionalInfo.yearsOfExperience > 0 &&
-    (formData.professionalInfo.specialties.length > 0 ||
-      formData.professionalInfo.customSpecialty.trim() !== "") &&
-    formData.professionalInfo.qualifications.length > 0;
+    checks.role &&
+    checks.license &&
+    checks.experience &&
+    checks.specialty &&
+    checks.qualification;
 
   return (
     <div
@@ -102,21 +134,48 @@ const ProfessionalInfo: React.FC<ProfessionalInfoProps> = ({
       </header>
 
       <div className="space-y-6 sm:space-y-8">
-        {/* Row: License & Experience */}
+        {/* ── Role ────────────────────────────────────────────── */}
+        <div>
+          <FieldLabel ok={checks.role} required>
+            Professional Role
+          </FieldLabel>
+          <div className="relative">
+            <select
+              value={info.role}
+              onChange={(e) => handleRoleChange(e.target.value)}
+              className={`${inputBase} appearance-none pr-10 ${
+                info.role ? "text-slate-900" : "text-slate-400"
+              }`}
+            >
+              <option value="" disabled>
+                Select your role…
+              </option>
+              {medicRoles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.title ?? r.id}
+                </option>
+              ))}
+            </select>
+            <ChevronDown
+              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+              size={18}
+            />
+          </div>
+          {!checks.role && <Hint>Please select your professional role.</Hint>}
+        </div>
+
+        {/* ── License & Experience ────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5 sm:gap-6">
           <div>
-            <label className="block text-sm font-bold text-slate-900 mb-2">
+            <FieldLabel ok={checks.license} required>
               License Number
-            </label>
+            </FieldLabel>
             <input
               type="text"
-              value={formData.professionalInfo.licenseNumber}
+              value={info.licenseNumber}
               onChange={(e) =>
                 updateFormData({
-                  professionalInfo: {
-                    ...formData.professionalInfo,
-                    licenseNumber: e.target.value,
-                  },
+                  professionalInfo: { ...info, licenseNumber: e.target.value },
                 })
               }
               className={inputBase}
@@ -124,67 +183,82 @@ const ProfessionalInfo: React.FC<ProfessionalInfoProps> = ({
             />
           </div>
           <div>
-            <label className="block text-sm font-bold text-slate-900 mb-2">
+            <FieldLabel ok={checks.experience} required>
               Years of Experience
-            </label>
+            </FieldLabel>
             <input
               type="number"
               min="0"
-              value={formData.professionalInfo.yearsOfExperience}
-              onChange={(e) =>
+              max="99"
+              value={info.yearsOfExperience}
+              onChange={(e) => {
+                const raw = e.target.value;
+                const parsed =
+                  raw === "" ? 0 : Math.max(0, parseInt(raw, 10) || 0);
                 updateFormData({
                   professionalInfo: {
-                    ...formData.professionalInfo,
-                    yearsOfExperience: parseInt(e.target.value) || 0,
+                    ...info,
+                    yearsOfExperience: parsed,
                   },
-                })
-              }
+                });
+              }}
               className={inputBase}
               placeholder="0"
             />
+            <Hint>Enter 0 if you&apos;re a new graduate.</Hint>
           </div>
         </div>
 
-        {/* Specialties */}
-        {selectedRole && selectedRole.specialties.length > 0 ? (
+        {/* ── Specialties ─────────────────────────────────────── */}
+        {hasPresetSpecialties ? (
           <div>
-            <label className="block text-sm font-bold text-slate-900 mb-3 sm:mb-4">
+            <FieldLabel ok={checks.specialty} required>
               Select Your Specialties
-            </label>
+            </FieldLabel>
             <div className="flex flex-wrap gap-2">
               {selectedRole.specialties.map((specialty) => {
-                const isSelected =
-                  formData.professionalInfo.specialties.includes(specialty);
+                const isSelected = specialties.includes(specialty);
                 return (
                   <motion.button
                     key={specialty}
+                    type="button"
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={() => handleSpecialtyToggle(specialty)}
-                    className={`px-3 sm:px-4 py-2 rounded-full border text-xs sm:text-sm font-medium transition-all ${
+                    className={`relative px-3 sm:px-4 py-2 rounded-full border text-xs sm:text-sm font-medium transition-all ${
                       isSelected
                         ? "bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-500/20"
                         : "bg-white text-slate-700 border-slate-200 hover:border-emerald-500"
                     }`}
                   >
+                    {isSelected && (
+                      <Check
+                        size={12}
+                        strokeWidth={3}
+                        className="inline-block mr-1.5 -mt-0.5"
+                      />
+                    )}
                     {specialty}
                   </motion.button>
                 );
               })}
             </div>
+            {!checks.specialty && (
+              <Hint>Pick at least one specialty to continue.</Hint>
+            )}
           </div>
         ) : (
           <div>
-            <label className="block text-sm font-bold text-slate-900 mb-2">
+            <FieldLabel ok={checks.specialty} required>
               Specify Specialty
-            </label>
+            </FieldLabel>
             <input
               type="text"
-              value={formData.professionalInfo.customSpecialty}
+              value={info.customSpecialty}
               onChange={(e) =>
                 updateFormData({
                   professionalInfo: {
-                    ...formData.professionalInfo,
+                    ...info,
                     customSpecialty: e.target.value,
                   },
                 })
@@ -192,60 +266,62 @@ const ProfessionalInfo: React.FC<ProfessionalInfoProps> = ({
               className={inputBase}
               placeholder="Enter your specific medical specialty"
             />
+            {!checks.specialty && (
+              <Hint>Tell us your specialty to continue.</Hint>
+            )}
           </div>
         )}
 
-        {/* Qualifications */}
+        {/* ── Qualifications ──────────────────────────────────── */}
         <div>
-          <label className="block text-sm font-bold text-slate-900 mb-3 sm:mb-4">
-            Certifications & Qualifications
-          </label>
+          <FieldLabel ok={checks.qualification} required>
+            Certifications &amp; Qualifications
+          </FieldLabel>
+
           <div className="flex flex-wrap gap-2 mb-3 sm:mb-4">
             <AnimatePresence>
-              {formData.professionalInfo.qualifications.map((q, index) => (
+              {qualifications.map((q) => (
                 <motion.div
-                  key={index}
+                  key={q}
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.8 }}
-                  className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg text-slate-700 text-xs sm:text-sm max-w-full"
+                  className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 px-3 py-1.5 rounded-lg text-emerald-700 text-xs sm:text-sm max-w-full"
                 >
                   <GraduationCap size={14} className="shrink-0" />
                   <span className="truncate">{q}</span>
                   <button
-                    onClick={() =>
-                      updateFormData({
-                        professionalInfo: {
-                          ...formData.professionalInfo,
-                          qualifications:
-                            formData.professionalInfo.qualifications.filter(
-                              (x) => x !== q,
-                            ),
-                        },
-                      })
-                    }
+                    type="button"
+                    onClick={() => removeQualification(q)}
                     aria-label={`Remove ${q}`}
                     className="shrink-0"
                   >
                     <X
                       size={14}
-                      className="hover:text-red-500 transition-colors"
+                      className="hover:text-rose-500 transition-colors"
                     />
                   </button>
                 </motion.div>
               ))}
             </AnimatePresence>
           </div>
+
           <div className="flex flex-col sm:flex-row gap-2">
             <input
               type="text"
               value={newQualification}
               onChange={(e) => setNewQualification(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && addQualification()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addQualification();
+                }
+              }}
               className={`${inputBase} flex-1`}
               placeholder="Add qualification (e.g. Board Certified)"
             />
             <button
+              type="button"
               onClick={addQualification}
               disabled={!newQualification.trim()}
               className="bg-slate-900 text-white px-6 py-3 rounded-xl hover:bg-emerald-600 transition-colors disabled:bg-slate-200 disabled:text-slate-400 flex items-center justify-center"
@@ -254,21 +330,23 @@ const ProfessionalInfo: React.FC<ProfessionalInfoProps> = ({
               <Plus size={20} />
             </button>
           </div>
+
+          {!checks.qualification && (
+            <Hint>Type a qualification and press Enter or + to add it.</Hint>
+          )}
         </div>
 
-        {/* Bio */}
+        {/* ── Bio (optional) ──────────────────────────────────── */}
         <div>
-          <label className="block text-sm font-bold text-slate-900 mb-2">
+          <label className="flex items-center gap-2 text-sm font-bold text-slate-900 mb-2">
             Professional Bio
+            <span className="text-slate-400 font-normal">(optional)</span>
           </label>
           <textarea
-            value={formData.professionalInfo.bio}
+            value={info.bio}
             onChange={(e) =>
               updateFormData({
-                professionalInfo: {
-                  ...formData.professionalInfo,
-                  bio: e.target.value,
-                },
+                professionalInfo: { ...info, bio: e.target.value },
               })
             }
             rows={4}
@@ -281,13 +359,15 @@ const ProfessionalInfo: React.FC<ProfessionalInfoProps> = ({
       {/* Footer Navigation */}
       <div className="flex justify-between items-center gap-3 mt-8 sm:mt-12 pt-6 sm:pt-8 border-t border-slate-100">
         <button
+          type="button"
           onClick={onBack}
-          className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-3 rounded-xl font-bold text-slate-600 hover:text-slate-900 transition-colors text-sm sm:text-base"
+          className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-3 rounded-xl font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors text-sm sm:text-base"
         >
           <ChevronLeft size={20} />
           Back
         </button>
         <button
+          type="button"
           onClick={onNext}
           disabled={!isFormValid}
           className={`px-6 sm:px-10 py-3.5 sm:py-4 rounded-2xl font-bold transition-all flex items-center gap-2 sm:gap-3 shadow-lg text-sm sm:text-base ${
@@ -305,3 +385,38 @@ const ProfessionalInfo: React.FC<ProfessionalInfoProps> = ({
 };
 
 export default ProfessionalInfo;
+
+// ─── Small helpers (same as PersonalInfo / PracticeInfo) ──────────
+function FieldLabel({
+  children,
+  ok,
+  required,
+}: {
+  children: React.ReactNode;
+  ok: boolean;
+  required?: boolean;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-sm font-bold text-slate-900 mb-2">
+      {children}
+      {required && (
+        <span
+          className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${
+            ok ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-500"
+          }`}
+        >
+          {ok ? <Check size={10} /> : <AlertCircle size={10} />}
+          {ok ? "Done" : "Required"}
+        </span>
+      )}
+    </label>
+  );
+}
+
+function Hint({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="flex items-center gap-1.5 text-xs text-emerald-700 mt-1.5">
+      <AlertCircle size={12} /> {children}
+    </p>
+  );
+}

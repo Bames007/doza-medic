@@ -20,6 +20,46 @@ import { useMedic } from "../DashboardContext";
 import { cn } from "@/app/utils/utils";
 import { poppins, bebasNeue } from "@/app/utils/constants";
 
+// ─── Role → title mapping ──────────────────────────────────────
+// Keys must match your `medicRoles` ids in ../../data/constant.ts.
+// Anything not in this map = no prefix (just the surname shows).
+const ROLE_TITLES: Record<string, string> = {
+  doctor: "Dr.",
+  physician: "Dr.",
+  medical_doctor: "Dr.",
+  dentist: "Dr.",
+  nurse: "Nrs.",
+  registered_nurse: "Nrs.",
+  pharmacist: "Pharm.",
+  pharmacy_technician: "Pharm.",
+  physiotherapist: "PT.",
+  physiotherapy: "PT.",
+  midwife: "Mw.",
+  lab_scientist: "LS.",
+  medical_lab_scientist: "LS.",
+  radiographer: "Rad.",
+  psychologist: "Psy.",
+  clinical_psychologist: "Psy.",
+  optometrist: "OD.",
+  speech_therapist: "SLP.",
+};
+
+function normalizeRoleKey(role?: string | null): string {
+  return (role || "").toLowerCase().trim().replace(/\s+/g, "_");
+}
+
+function getMedicTitle(role?: string | null): string {
+  const key = normalizeRoleKey(role);
+  if (!key) return "";
+  return ROLE_TITLES[key] || "";
+}
+
+function getInitials(first?: string, last?: string): string {
+  const a = (first || "").trim().charAt(0);
+  const b = (last || "").trim().charAt(0);
+  return (a + b || "M").toUpperCase();
+}
+
 // ─── Fake data for placeholders (replace with real queries later) ─
 interface DashboardStats {
   todayAppointments: number;
@@ -51,13 +91,20 @@ export default function DashboardPanel() {
   const greeting =
     hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
-  // Quick actions — only show ones matching their consultation types
+  // ─── Title-aware display name ─────────────────────────────────
+  const title = getMedicTitle(medic.professionalRole);
+  const surname = (medic.lastName || medic.firstName || "Medic").toUpperCase();
+  // Only prefix with a title if we recognize the role.
+  // No role → surname shows on its own (no more hardcoded "DR.").
+  const displayName = title ? `${title} ${surname}` : surname;
+  const initials = getInitials(medic.firstName, medic.lastName);
+  const hasRole = !!medic.professionalRole?.trim();
+
   const quickActions = [
     {
       id: "appointments",
       label: "Appointments",
       icon: Calendar,
-      color: "from-emerald-500 to-teal-500",
       bg: "bg-emerald-50",
       text: "text-emerald-700",
     },
@@ -65,7 +112,6 @@ export default function DashboardPanel() {
       id: "patients",
       label: "Patients",
       icon: Users,
-      color: "from-blue-500 to-indigo-500",
       bg: "bg-blue-50",
       text: "text-blue-700",
     },
@@ -73,7 +119,6 @@ export default function DashboardPanel() {
       id: "prescriptions",
       label: "Prescriptions",
       icon: Stethoscope,
-      color: "from-purple-500 to-pink-500",
       bg: "bg-purple-50",
       text: "text-purple-700",
     },
@@ -81,7 +126,6 @@ export default function DashboardPanel() {
       id: "earnings",
       label: "Earnings",
       icon: Wallet,
-      color: "from-amber-500 to-orange-500",
       bg: "bg-amber-50",
       text: "text-amber-700",
     },
@@ -93,51 +137,68 @@ export default function DashboardPanel() {
           MOBILE LAYOUT
           ═══════════════════════════════════════════════════════════ */}
       <div className="lg:hidden">
-        {/* ─── Hero card with greeting + verification ───────────── */}
+        {/* ─── Hero card ───────────────────────────────────────── */}
         <div className="px-4 pt-4">
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-600 p-6 text-white shadow-xl shadow-emerald-500/20"
           >
-            {/* Background pattern */}
             <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_1px_1px,white_1px,transparent_0)] bg-[length:24px_24px]" />
             <div className="absolute -right-8 -top-8 w-40 h-40 bg-white/10 rounded-full blur-2xl" />
 
-            <div className="relative">
-              <p className="text-emerald-100 text-xs font-bold uppercase tracking-[0.2em]">
-                {greeting}
-              </p>
-              <h1
-                className={cn(
-                  "text-3xl font-bold mt-1 mb-1 leading-tight",
-                  bebasNeue.className,
-                )}
-              >
-                DR. {medic.lastName?.toUpperCase() || "MEDIC"}
-              </h1>
-              <p className="text-emerald-100/80 text-sm">
-                {medic.professionalRole
-                  ? `Your ${medic.professionalRole} practice is ready`
-                  : "Ready to help patients today"}
-              </p>
+            <div className="relative flex items-start gap-4">
+              {/* Initials avatar */}
+              <div className="shrink-0 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 backdrop-blur-sm border border-white/25 font-black text-lg tracking-wider">
+                {initials}
+              </div>
 
-              {/* Verification pill */}
-              <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/15 backdrop-blur-sm border border-white/20">
+              <div className="min-w-0 flex-1">
+                <p className="text-emerald-100 text-[10px] font-black uppercase tracking-[0.2em]">
+                  {greeting}
+                </p>
+                <h1
+                  className={cn(
+                    "text-3xl font-bold mt-1 leading-tight truncate",
+                    bebasNeue.className,
+                  )}
+                >
+                  {displayName}
+                </h1>
+                <p className="text-emerald-100/80 text-xs mt-0.5 truncate">
+                  {hasRole
+                    ? `${medic.professionalRole} practice`
+                    : "Welcome to Doza Medic"}
+                </p>
+              </div>
+            </div>
+
+            {/* Status pills */}
+            <div className="relative mt-4 flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/15 backdrop-blur-sm border border-white/20">
                 {medic.verified ? (
                   <>
-                    <ShieldCheck size={14} className="text-white" />
-                    <span className="text-xs font-bold">Verified Medic</span>
+                    <ShieldCheck size={13} />
+                    <span className="text-[11px] font-bold">Verified</span>
                   </>
                 ) : (
                   <>
-                    <AlertCircle size={14} className="text-amber-200" />
-                    <span className="text-xs font-bold">
-                      Verification Pending
+                    <AlertCircle size={13} />
+                    <span className="text-[11px] font-bold">
+                      Verification pending
                     </span>
                   </>
                 )}
               </div>
+
+              {hasRole && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 border border-white/15">
+                  <Stethoscope size={12} />
+                  <span className="text-[11px] font-bold capitalize">
+                    {medic.professionalRole}
+                  </span>
+                </div>
+              )}
             </div>
           </motion.div>
         </div>
@@ -159,7 +220,7 @@ export default function DashboardPanel() {
                 Complete your profile
               </p>
               <p className="text-xs text-amber-700/80 mt-0.5">
-                Finish onboarding to unlock prescriptions & earnings
+                Finish onboarding to unlock prescriptions &amp; earnings
               </p>
             </div>
             <ChevronRight size={18} className="text-amber-700 shrink-0" />
@@ -239,7 +300,7 @@ export default function DashboardPanel() {
                   transition={{ delay: 0.05 + i * 0.04 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={() => navigateToPanel(action.id)}
-                  className="group p-4 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-all text-left"
+                  className="group p-4 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md hover:border-emerald-100 transition-all text-left"
                 >
                   <div
                     className={cn(
@@ -288,6 +349,12 @@ export default function DashboardPanel() {
             <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
               Your schedule is clear. New bookings will appear here.
             </p>
+            <button
+              onClick={() => navigateToPanel("profile")}
+              className="mt-4 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:text-emerald-700"
+            >
+              Review availability <ArrowRight size={12} />
+            </button>
           </div>
         </div>
 
@@ -338,23 +405,28 @@ export default function DashboardPanel() {
           ═══════════════════════════════════════════════════════════ */}
       <div className="hidden lg:block p-8 max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
-            {greeting}
-          </p>
-          <h1
-            className={cn(
-              "text-5xl font-bold text-slate-900 mt-1 leading-tight",
-              bebasNeue.className,
-            )}
-          >
-            DR. {medic.lastName?.toUpperCase() || "MEDIC"}
-          </h1>
-          <p className="text-slate-500 mt-2">
-            {medic.professionalRole
-              ? `Your ${medic.professionalRole} practice is ready`
-              : "Ready to help patients today"}
-          </p>
+        <div className="mb-8 flex items-center gap-5">
+          <div className="shrink-0 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white font-black text-xl tracking-wider shadow-lg shadow-emerald-500/20">
+            {initials}
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+              {greeting}
+            </p>
+            <h1
+              className={cn(
+                "text-5xl font-bold text-slate-900 mt-1 leading-tight",
+                bebasNeue.className,
+              )}
+            >
+              {displayName}
+            </h1>
+            <p className="text-slate-500 mt-1">
+              {hasRole
+                ? `Your ${medic.professionalRole} practice is ready`
+                : "Ready to help patients today"}
+            </p>
+          </div>
         </div>
 
         {/* Verification banner */}
@@ -441,6 +513,12 @@ export default function DashboardPanel() {
               <p className="text-xs text-slate-500 mt-1">
                 Your schedule is clear
               </p>
+              <button
+                onClick={() => navigateToPanel("profile")}
+                className="mt-4 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:text-emerald-700"
+              >
+                Review availability <ArrowRight size={12} />
+              </button>
             </div>
           </div>
 
@@ -516,7 +594,7 @@ function StatCard({
     <motion.button
       whileTap={{ scale: 0.97 }}
       onClick={onClick}
-      className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-left hover:shadow-md transition-all"
+      className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-left hover:shadow-md hover:border-emerald-100 transition-all"
     >
       <div
         className={cn(
@@ -553,17 +631,16 @@ function DesktopStatCard({
     emerald: {
       bg: "bg-emerald-50",
       text: "text-emerald-600",
-      bar: "bg-emerald-500",
     },
-    blue: { bg: "bg-blue-50", text: "text-blue-600", bar: "bg-blue-500" },
-    amber: { bg: "bg-amber-50", text: "text-amber-600", bar: "bg-amber-500" },
-    pink: { bg: "bg-pink-50", text: "text-pink-600", bar: "bg-pink-500" },
+    blue: { bg: "bg-blue-50", text: "text-blue-600" },
+    amber: { bg: "bg-amber-50", text: "text-amber-600" },
+    pink: { bg: "bg-pink-50", text: "text-pink-600" },
   }[color];
 
   return (
     <button
       onClick={onClick}
-      className="group bg-white p-5 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all text-left"
+      className="group bg-white p-5 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md hover:border-emerald-100 transition-all text-left"
     >
       <div className="flex items-center justify-between mb-4">
         <div
