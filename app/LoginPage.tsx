@@ -165,11 +165,29 @@ const MedicLoginPage: React.FC = () => {
         });
 
         if (!cookieRes.ok) {
-          const err = await cookieRes.json().catch(() => ({}));
+          const raw = await cookieRes.text().catch(() => "");
+          let message = "Could not establish session. Try again.";
+          let code: string | null = null;
+
+          try {
+            const json = raw ? JSON.parse(raw) : {};
+            if (json?.error) message = json.error;
+            if (json?.code) code = json.code;
+          } catch {
+            // HTML error page — show the status so you know what broke
+            message = `Session error (HTTP ${cookieRes.status})`;
+          }
+
+          console.error("[/login] cookie exchange failed", {
+            status: cookieRes.status,
+            body: raw.substring(0, 500),
+            code,
+          });
+
           await signOut(auth);
           setShowBubble(false);
           setSubmitting(false);
-          setError(err.error || "Could not establish session. Try again.");
+          setError(message);
           return;
         }
       } catch {

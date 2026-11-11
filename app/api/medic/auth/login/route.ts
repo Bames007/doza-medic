@@ -1,16 +1,59 @@
+// app/api/medic/auth/login/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminAuth, adminDb } from "@/app/utils/firebaseAdmin";
 import { z } from "zod";
 import logger from "@/app/utils/logger";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const schema = z.object({ idToken: z.string().min(1) });
 
 export async function POST(req: NextRequest) {
   try {
-    const { idToken } = schema.parse(await req.json());
+    const json = await req.json().catch(() => null);
+    if (!json) {
+      return NextResponse.json(
+        { success: false, error: "Invalid JSON body" },
+        { status: 400 },
+      );
+    }
 
-    const decoded = await adminAuth.verifyIdToken(idToken);
+    const parsed = schema.safeParse(json);
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "idToken is required",
+          details: parsed.error.flatten(),
+        },
+        { status: 400 },
+      );
+    }
 
+    const { idToken } = parsed.data;
+
+    // 1. Verify the Firebase ID token
+    let decoded;
+    try {
+      decoded = await adminAuth.verifyIdToken(idToken);
+    } catch (err: any) {
+      logger.warn({
+        message: "verifyIdToken failed",
+        code: err?.code,
+        error: err?.message,
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid or expired ID token",
+          code: err?.code ?? null,
+        },
+        { status: 401 },
+      );
+    }
+
+    // 2. Read the medic record
     const snap = await adminDb.ref(`doza_medics/${decoded.uid}`).once("value");
     if (!snap.exists()) {
       return NextResponse.json(
@@ -27,10 +70,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const expiresIn = 60 * 60 * 24 * 5 * 1000;
-    const sessionCookie = await adminAuth.createSessionCookie(idToken, {
-      expiresIn,
-    });
+    // 3. Create the session cookie
+    const expiresIn = 1000 * 60 * 60 * 24 * 5; // 5 days in ms
+    let sessionCookie: string;
+    try {
+      sessionCookie = await adminAuth.createSessionCookie(idToken, {
+        expiresIn,
+      });
+    } catch (err: any) {
+      logger.error({
+        message: "createSessionCookie failed",
+        code: err?.code,
+        error: err?.message,
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Session creation failed",
+          code: err?.code ?? null,
+        },
+        { status: 401 },
+      );
+    }
 
     const res = NextResponse.json({ success: true });
     res.cookies.set("__session", sessionCookie, {
@@ -43,12 +104,20 @@ export async function POST(req: NextRequest) {
     return res;
   } catch (err: any) {
     logger.error({
-      message: "Medic login cookie failed",
+      message: "Medic login unexpected failure",
       error: err?.message,
+      stack: err?.stack,
     });
     return NextResponse.json(
-      { success: false, error: "Login failed" },
-      { status: 401 },
+      {
+        success: false,
+        error:
+          process.env.NODE_ENV === "production"
+            ? "Login failed"
+            : err?.message || "Login failed",
+        // In production, this stays generic. In dev, you see the real error.
+      },
+      { status: 500 },
     );
   }
 }
