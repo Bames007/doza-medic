@@ -1,7 +1,8 @@
-// app/dashboard/panels/DashboardPanel.tsx
+// app/medic/dashboard/panels/DashboardPanel.tsx
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   Calendar,
@@ -9,20 +10,22 @@ import {
   Wallet,
   Stethoscope,
   ShieldCheck,
-  TrendingUp,
   ArrowRight,
   Star,
   ChevronRight,
   CheckCircle2,
   AlertCircle,
+  Bell,
+  Video,
+  Home,
+  User as UserIcon,
+  Clock,
 } from "lucide-react";
 import { useMedic } from "../DashboardContext";
 import { cn } from "@/app/utils/utils";
 import { poppins, bebasNeue } from "@/app/utils/constants";
+import { useMedicStats } from "../hooks/useMedicData";
 
-// ─── Role → title mapping ──────────────────────────────────────
-// Keys must match your `medicRoles` ids in ../../data/constant.ts.
-// Anything not in this map = no prefix (just the surname shows).
 const ROLE_TITLES: Record<string, string> = {
   doctor: "Dr.",
   physician: "Dr.",
@@ -33,69 +36,56 @@ const ROLE_TITLES: Record<string, string> = {
   pharmacist: "Pharm.",
   pharmacy_technician: "Pharm.",
   physiotherapist: "PT.",
-  physiotherapy: "PT.",
   midwife: "Mw.",
   lab_scientist: "LS.",
-  medical_lab_scientist: "LS.",
-  radiographer: "Rad.",
   psychologist: "Psy.",
-  clinical_psychologist: "Psy.",
   optometrist: "OD.",
   speech_therapist: "SLP.",
 };
 
-function normalizeRoleKey(role?: string | null): string {
-  return (role || "").toLowerCase().trim().replace(/\s+/g, "_");
+const normalizeRoleKey = (r?: string | null) =>
+  (r || "").toLowerCase().trim().replace(/\s+/g, "_");
+const getMedicTitle = (r?: string | null) =>
+  ROLE_TITLES[normalizeRoleKey(r)] ?? "";
+
+const getInitials = (first?: string, last?: string) =>
+  ((first?.charAt(0) || "") + (last?.charAt(0) || "") || "M").toUpperCase();
+
+function fmtNaira(n: number) {
+  if (!n) return "₦0";
+  if (n >= 1_000_000) return `₦${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `₦${(n / 1000).toFixed(0)}k`;
+  return `₦${n.toLocaleString()}`;
 }
 
-function getMedicTitle(role?: string | null): string {
-  const key = normalizeRoleKey(role);
-  if (!key) return "";
-  return ROLE_TITLES[key] || "";
+function fmtAgo(iso: string) {
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
 }
-
-function getInitials(first?: string, last?: string): string {
-  const a = (first || "").trim().charAt(0);
-  const b = (last || "").trim().charAt(0);
-  return (a + b || "M").toUpperCase();
-}
-
-// ─── Fake data for placeholders (replace with real queries later) ─
-interface DashboardStats {
-  todayAppointments: number;
-  totalPatients: number;
-  monthEarnings: number;
-  rating: number;
-  pendingConsults: number;
-}
-
-const EMPTY_STATS: DashboardStats = {
-  todayAppointments: 0,
-  totalPatients: 0,
-  monthEarnings: 0,
-  rating: 0,
-  pendingConsults: 0,
-};
 
 export default function DashboardPanel() {
   const { medic, navigateToPanel } = useMedic();
-  const [stats, setStats] = useState<DashboardStats>(EMPTY_STATS);
+  const router = useRouter();
+  const { stats, todaySchedule, recentNotifications, isLoading } =
+    useMedicStats();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
-
   if (!mounted || !medic) return null;
 
   const firstName = medic.firstName || "there";
   const hour = new Date().getHours();
   const greeting =
     hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-
-  // ─── Title-aware display name ─────────────────────────────────
   const title = getMedicTitle(medic.professionalRole);
   const surname = (medic.lastName || medic.firstName || "Medic").toUpperCase();
-  // Only prefix with a title if we recognize the role.
-  // No role → surname shows on its own (no more hardcoded "DR.").
   const displayName = title ? `${title} ${surname}` : surname;
   const initials = getInitials(medic.firstName, medic.lastName);
   const hasRole = !!medic.professionalRole?.trim();
@@ -133,11 +123,8 @@ export default function DashboardPanel() {
 
   return (
     <div className={cn("pb-24 lg:pb-8", poppins.className)}>
-      {/* ═══════════════════════════════════════════════════════════
-          MOBILE LAYOUT
-          ═══════════════════════════════════════════════════════════ */}
+      {/* ─── MOBILE ─────────────────────────────────────────── */}
       <div className="lg:hidden">
-        {/* ─── Hero card ───────────────────────────────────────── */}
         <div className="px-4 pt-4">
           <motion.div
             initial={{ opacity: 0, y: 12 }}
@@ -148,11 +135,9 @@ export default function DashboardPanel() {
             <div className="absolute -right-8 -top-8 w-40 h-40 bg-white/10 rounded-full blur-2xl" />
 
             <div className="relative flex items-start gap-4">
-              {/* Initials avatar */}
               <div className="shrink-0 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 backdrop-blur-sm border border-white/25 font-black text-lg tracking-wider">
                 {initials}
               </div>
-
               <div className="min-w-0 flex-1">
                 <p className="text-emerald-100 text-[10px] font-black uppercase tracking-[0.2em]">
                   {greeting}
@@ -173,7 +158,6 @@ export default function DashboardPanel() {
               </div>
             </div>
 
-            {/* Status pills */}
             <div className="relative mt-4 flex flex-wrap items-center gap-2">
               <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/15 backdrop-blur-sm border border-white/20">
                 {medic.verified ? (
@@ -190,7 +174,6 @@ export default function DashboardPanel() {
                   </>
                 )}
               </div>
-
               {hasRole && (
                 <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 border border-white/15">
                   <Stethoscope size={12} />
@@ -203,7 +186,36 @@ export default function DashboardPanel() {
           </motion.div>
         </div>
 
-        {/* ─── Verification nudge ──────────────────────────────── */}
+        {/* New bookings banner */}
+        {stats.unreadNotifications > 0 && (
+          <motion.button
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            onClick={() => navigateToPanel("appointments")}
+            className="mt-4 mx-4 w-[calc(100%-2rem)] flex items-center gap-3 p-4 rounded-2xl bg-blue-50 border border-blue-100 text-left"
+          >
+            <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center shrink-0 relative">
+              <Bell size={18} className="text-blue-700" />
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">
+                {stats.unreadNotifications > 9
+                  ? "9+"
+                  : stats.unreadNotifications}
+              </span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-bold text-blue-900 text-sm">
+                {stats.unreadNotifications} new notification
+                {stats.unreadNotifications === 1 ? "" : "s"}
+              </p>
+              <p className="text-xs text-blue-700/80 mt-0.5">
+                Bookings, messages, and reviews
+              </p>
+            </div>
+            <ChevronRight size={18} className="text-blue-700 shrink-0" />
+          </motion.button>
+        )}
+
+        {/* Profile nudge */}
         {!medic.profileComplete && (
           <motion.button
             initial={{ opacity: 0, y: 8 }}
@@ -227,7 +239,7 @@ export default function DashboardPanel() {
           </motion.button>
         )}
 
-        {/* ─── Stats grid ─────────────────────────────────────── */}
+        {/* Stats */}
         <div className="mt-6 px-4">
           <div className="flex items-center justify-between mb-3">
             <h2
@@ -239,10 +251,9 @@ export default function DashboardPanel() {
               TODAY'S OVERVIEW
             </h2>
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              Live
+              {isLoading ? "…" : "Live"}
             </span>
           </div>
-
           <div className="grid grid-cols-2 gap-3">
             <StatCard
               icon={Calendar}
@@ -263,7 +274,7 @@ export default function DashboardPanel() {
             <StatCard
               icon={Wallet}
               label="Earnings"
-              value={`₦${(stats.monthEarnings / 1000).toFixed(0)}k`}
+              value={fmtNaira(stats.monthEarnings)}
               suffix="this month"
               color="amber"
               onClick={() => navigateToPanel("earnings")}
@@ -272,14 +283,18 @@ export default function DashboardPanel() {
               icon={Star}
               label="Rating"
               value={stats.rating > 0 ? stats.rating.toFixed(1) : "—"}
-              suffix={stats.rating > 0 ? "from patients" : "no reviews yet"}
+              suffix={
+                stats.ratingCount > 0
+                  ? `${stats.ratingCount} review${stats.ratingCount === 1 ? "" : "s"}`
+                  : "no reviews yet"
+              }
               color="pink"
               onClick={() => navigateToPanel("reviews")}
             />
           </div>
         </div>
 
-        {/* ─── Quick actions ──────────────────────────────────── */}
+        {/* Quick actions */}
         <div className="mt-8 px-4">
           <h2
             className={cn(
@@ -322,7 +337,7 @@ export default function DashboardPanel() {
           </div>
         </div>
 
-        {/* ─── Today's schedule ───────────────────────────────── */}
+        {/* Today's schedule */}
         <div className="mt-8 px-4">
           <div className="flex items-center justify-between mb-3">
             <h2
@@ -341,24 +356,26 @@ export default function DashboardPanel() {
             </button>
           </div>
 
-          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 text-center">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3">
-              <Calendar size={24} />
+          {todaySchedule.length === 0 ? (
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 text-center">
+              <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3">
+                <Calendar size={24} />
+              </div>
+              <p className="font-bold text-slate-900">No appointments today</p>
+              <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
+                Your schedule is clear. New bookings will appear here.
+              </p>
             </div>
-            <p className="font-bold text-slate-900">No appointments today</p>
-            <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
-              Your schedule is clear. New bookings will appear here.
-            </p>
-            <button
-              onClick={() => navigateToPanel("profile")}
-              className="mt-4 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:text-emerald-700"
-            >
-              Review availability <ArrowRight size={12} />
-            </button>
-          </div>
+          ) : (
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm divide-y divide-slate-50 overflow-hidden">
+              {todaySchedule.slice(0, 4).map((apt: any) => (
+                <TodayAppointmentRow key={apt.id} apt={apt} />
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* ─── Recent activity ────────────────────────────────── */}
+        {/* Recent activity — real notifications */}
         <div className="mt-8 px-4 mb-8">
           <h2
             className={cn(
@@ -369,42 +386,53 @@ export default function DashboardPanel() {
             RECENT ACTIVITY
           </h2>
           <div className="bg-white rounded-3xl border border-slate-100 shadow-sm divide-y divide-slate-50">
-            <ActivityRow
-              icon={CheckCircle2}
-              iconBg="bg-emerald-50"
-              iconColor="text-emerald-600"
-              title="Welcome to Doza Medic"
-              subtitle="Your account is active"
-              time="Just now"
-            />
-            {medic.profileComplete ? (
-              <ActivityRow
-                icon={ShieldCheck}
-                iconBg="bg-amber-50"
-                iconColor="text-amber-600"
-                title="Profile submitted for review"
-                subtitle="We'll notify you soon"
-                time="Pending"
-              />
+            {recentNotifications.length === 0 ? (
+              <div className="p-6 text-center">
+                <p className="text-sm font-bold text-slate-900">Nothing yet</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  New bookings, messages, and ratings will show up here.
+                </p>
+              </div>
             ) : (
-              <ActivityRow
-                icon={AlertCircle}
-                iconBg="bg-amber-50"
-                iconColor="text-amber-600"
-                title="Complete your profile"
-                subtitle="Verify to unlock all features"
-                time="Action needed"
-              />
+              recentNotifications.map((n: any) => (
+                <ActivityRow
+                  key={n.id}
+                  icon={
+                    n.type === "appointment_booked"
+                      ? Calendar
+                      : n.type === "patient_rated"
+                        ? Star
+                        : n.type === "new_message"
+                          ? Bell
+                          : CheckCircle2
+                  }
+                  iconBg={
+                    n.type === "patient_rated"
+                      ? "bg-amber-50"
+                      : n.type === "new_message"
+                        ? "bg-blue-50"
+                        : "bg-emerald-50"
+                  }
+                  iconColor={
+                    n.type === "patient_rated"
+                      ? "text-amber-600"
+                      : n.type === "new_message"
+                        ? "text-blue-600"
+                        : "text-emerald-600"
+                  }
+                  title={n.title}
+                  subtitle={n.body}
+                  time={fmtAgo(n.createdAt)}
+                  unread={!n.read}
+                />
+              ))
             )}
           </div>
         </div>
       </div>
 
-      {/* ═══════════════════════════════════════════════════════════
-          DESKTOP LAYOUT
-          ═══════════════════════════════════════════════════════════ */}
+      {/* ─── DESKTOP ────────────────────────────────────────── */}
       <div className="hidden lg:block p-8 max-w-7xl mx-auto">
-        {/* Header */}
         <div className="mb-8 flex items-center gap-5">
           <div className="shrink-0 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white font-black text-xl tracking-wider shadow-lg shadow-emerald-500/20">
             {initials}
@@ -429,7 +457,34 @@ export default function DashboardPanel() {
           </div>
         </div>
 
-        {/* Verification banner */}
+        {stats.unreadNotifications > 0 && (
+          <motion.button
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            onClick={() => navigateToPanel("appointments")}
+            className="w-full flex items-center gap-4 p-5 rounded-3xl bg-blue-50 border border-blue-100 text-left mb-4 hover:shadow-md transition-all"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-blue-100 flex items-center justify-center shrink-0 relative">
+              <Bell size={22} className="text-blue-700" />
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">
+                {stats.unreadNotifications > 9
+                  ? "9+"
+                  : stats.unreadNotifications}
+              </span>
+            </div>
+            <div className="flex-1">
+              <p className="font-bold text-blue-900">
+                {stats.unreadNotifications} new notification
+                {stats.unreadNotifications === 1 ? "" : "s"}
+              </p>
+              <p className="text-sm text-blue-700/80 mt-1">
+                Bookings, messages, and reviews waiting for you
+              </p>
+            </div>
+            <ArrowRight size={20} className="text-blue-700" />
+          </motion.button>
+        )}
+
         {!medic.profileComplete && (
           <motion.button
             initial={{ opacity: 0, y: 8 }}
@@ -449,11 +504,10 @@ export default function DashboardPanel() {
                 matching
               </p>
             </div>
-            <ArrowRight size={20} className="text-amber-700 shrink-0" />
+            <ArrowRight size={20} className="text-amber-700" />
           </motion.button>
         )}
 
-        {/* Stats row */}
         <div className="grid grid-cols-4 gap-4 mb-8">
           <DesktopStatCard
             icon={Calendar}
@@ -472,7 +526,7 @@ export default function DashboardPanel() {
           <DesktopStatCard
             icon={Wallet}
             label="This Month"
-            value={`₦${(stats.monthEarnings / 1000).toFixed(0)}k`}
+            value={fmtNaira(stats.monthEarnings)}
             color="amber"
             onClick={() => navigateToPanel("earnings")}
           />
@@ -485,9 +539,7 @@ export default function DashboardPanel() {
           />
         </div>
 
-        {/* Two-column body */}
         <div className="grid grid-cols-3 gap-6">
-          {/* Schedule */}
           <div className="col-span-2 bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
             <div className="flex items-center justify-between mb-6">
               <h2
@@ -505,24 +557,27 @@ export default function DashboardPanel() {
                 See all <ArrowRight size={12} />
               </button>
             </div>
-            <div className="py-12 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3">
-                <Calendar size={28} />
+            {todaySchedule.length === 0 ? (
+              <div className="py-12 text-center">
+                <div className="w-16 h-16 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3">
+                  <Calendar size={28} />
+                </div>
+                <p className="font-bold text-slate-900">
+                  No appointments today
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Your schedule is clear
+                </p>
               </div>
-              <p className="font-bold text-slate-900">No appointments today</p>
-              <p className="text-xs text-slate-500 mt-1">
-                Your schedule is clear
-              </p>
-              <button
-                onClick={() => navigateToPanel("profile")}
-                className="mt-4 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:text-emerald-700"
-              >
-                Review availability <ArrowRight size={12} />
-              </button>
-            </div>
+            ) : (
+              <div className="divide-y divide-slate-50">
+                {todaySchedule.map((apt: any) => (
+                  <TodayAppointmentRow key={apt.id} apt={apt} />
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Quick actions */}
           <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
             <h2
               className={cn(
@@ -567,7 +622,71 @@ export default function DashboardPanel() {
   );
 }
 
-// ─── Mobile stat card ─────────────────────────────────────────────
+// ─── Sub-components ──────────────────────────────────────────────
+function TodayAppointmentRow({ apt }: { apt: any }) {
+  const start = new Date(apt.startTime);
+  const timeStr = start.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  const isOngoing = apt.status === "ongoing";
+  const TypeIcon =
+    apt.type === "video" ? Video : apt.type === "home" ? Home : UserIcon;
+  const initials = apt.patientName
+    .split(" ")
+    .map((s: string) => s[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-3 p-4",
+        isOngoing && "bg-emerald-50/40",
+      )}
+    >
+      <div
+        className={cn(
+          "w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs shrink-0 overflow-hidden",
+          isOngoing
+            ? "bg-emerald-600 text-white"
+            : "bg-emerald-50 text-emerald-700",
+        )}
+      >
+        {apt.patientProfileImage ? (
+          <img
+            src={apt.patientProfileImage}
+            alt={apt.patientName}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          initials
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-bold text-slate-900 truncate">
+          {apt.patientName}
+        </p>
+        <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
+          <Clock size={10} />
+          <span className="tabular-nums">{timeStr}</span>
+          <span>·</span>
+          <TypeIcon size={10} />
+          <span className="capitalize">{apt.type}</span>
+        </div>
+      </div>
+      {isOngoing && (
+        <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 bg-white border border-emerald-200 rounded-full px-2 py-0.5">
+          Live
+        </span>
+      )}
+    </div>
+  );
+}
+
 function StatCard({
   icon: Icon,
   label,
@@ -613,7 +732,6 @@ function StatCard({
   );
 }
 
-// ─── Desktop stat card ────────────────────────────────────────────
 function DesktopStatCard({
   icon: Icon,
   label,
@@ -628,10 +746,7 @@ function DesktopStatCard({
   onClick: () => void;
 }) {
   const colors = {
-    emerald: {
-      bg: "bg-emerald-50",
-      text: "text-emerald-600",
-    },
+    emerald: { bg: "bg-emerald-50", text: "text-emerald-600" },
     blue: { bg: "bg-blue-50", text: "text-blue-600" },
     amber: { bg: "bg-amber-50", text: "text-amber-600" },
     pink: { bg: "bg-pink-50", text: "text-pink-600" },
@@ -651,7 +766,6 @@ function DesktopStatCard({
         >
           <Icon size={18} className={colors.text} />
         </div>
-        <TrendingUp size={14} className="text-slate-300" />
       </div>
       <p className="text-3xl font-black text-slate-900 tabular-nums leading-none">
         {value}
@@ -663,7 +777,6 @@ function DesktopStatCard({
   );
 }
 
-// ─── Activity row ────────────────────────────────────────────────
 function ActivityRow({
   icon: Icon,
   iconBg,
@@ -671,6 +784,7 @@ function ActivityRow({
   title,
   subtitle,
   time,
+  unread,
 }: {
   icon: React.ElementType;
   iconBg: string;
@@ -678,9 +792,12 @@ function ActivityRow({
   title: string;
   subtitle: string;
   time: string;
+  unread?: boolean;
 }) {
   return (
-    <div className="flex items-start gap-3 p-4">
+    <div
+      className={cn("flex items-start gap-3 p-4", unread && "bg-emerald-50/30")}
+    >
       <div
         className={cn(
           "w-9 h-9 rounded-xl flex items-center justify-center shrink-0",
@@ -690,8 +807,8 @@ function ActivityRow({
         <Icon size={16} className={iconColor} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-bold text-slate-900">{title}</p>
-        <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>
+        <p className="text-sm font-bold text-slate-900 truncate">{title}</p>
+        <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{subtitle}</p>
       </div>
       <span className="text-[10px] font-bold text-slate-400 shrink-0 uppercase tracking-wider">
         {time}

@@ -1,7 +1,7 @@
 // app/medic/dashboard/MedicHeader.tsx
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import {
@@ -17,18 +17,20 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { auth } from "@/app/utils/firebaseConfig";
+import { authPost } from "@/app/utils/client-auth";
 import { getMedicSession, clearMedicSession } from "./utils/medicSession";
 import type { MedicUser } from "./type/type";
 import { cn } from "@/app/utils/utils";
 import { poppins, bebasNeue } from "@/app/utils/constants";
+import { useMedicNotifications, refreshMedicData } from "./hooks/useMedicData";
+import { useMedic } from "./DashboardContext";
+import { getMedicNavigation } from "./config/medic-nav";
 
 interface MedicHeaderProps {
   onMessagesToggle: () => void;
 }
 
 // ─── Role → abbreviated title ────────────────────────────────────
-// Keys must match `medicRoles` ids in app/registration/data/constant.ts
-// Anything not in this map → no prefix (just the name shows)
 const ROLE_TITLES: Record<string, string> = {
   doctor: "Dr.",
   physician: "Dr.",
@@ -59,30 +61,6 @@ const getMedicTitle = (role?: string | null): string => {
   return key ? (ROLE_TITLES[key] ?? "") : "";
 };
 
-// Route → display title
-const pathToPageName: Record<string, string> = {
-  "/dashboard": "Dashboard",
-  "/appointments": "Appointments",
-  "/messages": "Messages",
-  "/notifications": "Notifications",
-  "/consultations/video": "Video Consults",
-  "/consultations/home": "Home Visits",
-  "/consultations/in-person": "In-Person Queue",
-  "/patients": "My Patients",
-  "/records": "Medical Records",
-  "/lab-results": "Lab Results",
-  "/referrals": "Referrals",
-  "/prescriptions": "Prescriptions",
-  "/availability": "Availability",
-  "/services": "Services & Pricing",
-  "/earnings": "Earnings",
-  "/reviews": "Reviews",
-  "/profile": "Profile",
-  "/verification": "Verification",
-  "/settings": "Settings",
-  "/help": "Help",
-};
-
 // ─── Live clock hook ─────────────────────────────────────────────
 const useClock = () => {
   const [now, setNow] = useState(() => new Date());
@@ -93,14 +71,12 @@ const useClock = () => {
   return now;
 };
 
-// ─── Greeting helper ─────────────────────────────────────────────
 const getShortGreeting = (hour: number): string => {
   if (hour < 12) return "Morning";
   if (hour < 18) return "Afternoon";
   return "Evening";
 };
 
-// ─── Role humanizer (for the subtitle, not the title) ────────────
 const resolveRole = (medic: MedicUser | null): string => {
   if (!medic) return "";
   const raw =
@@ -111,36 +87,40 @@ const resolveRole = (medic: MedicUser | null): string => {
   return raw.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
-// ─── Placeholder notifications ───────────────────────────────────
-const notifications = [
-  {
-    id: 1,
-    message: "New appointment with John Smith",
-    time: "5 min ago",
-    unread: true,
-  },
-  {
-    id: 2,
-    message: "Lab results ready for review",
-    time: "1 hour ago",
-    unread: true,
-  },
-  {
-    id: 3,
-    message: "Patient check-in for Room 204",
-    time: "2 hours ago",
-    unread: false,
-  },
-];
+// ─── Relative time helper ────────────────────────────────────────
+function fmtAgo(iso: string): string {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0 || Number.isNaN(ms)) return "";
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
 
 export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
   const pathname = usePathname();
   const router = useRouter();
 
+  // ── Panel-renderer navigation ──────────────────────────────
+  const { navigateToPanel, activePanel } = useMedic();
+
+  const {
+    notifications,
+    unread,
+    mutate: refreshNotifs,
+  } = useMedicNotifications();
+  const unreadCount = unread;
+
   const [medic, setMedic] = useState<MedicUser | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [busyNotif, setBusyNotif] = useState<string | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const now = useClock();
@@ -198,10 +178,11 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
   }, [isMenuOpen, isNotificationsOpen, isMobile]);
 
   // ── Derived values ─────────────────────────────────────────────
-  const currentPage =
-    Object.entries(pathToPageName).find(
-      ([path]) => pathname === path || pathname.startsWith(path + "/"),
-    )?.[1] ?? "Dashboard";
+  // FIXED: page title now reflects the active panel, not a URL
+  const currentPage = useMemo(() => {
+    const items = getMedicNavigation(medic);
+    return items.find((i) => i.panelId === activePanel)?.name ?? "Dashboard";
+  }, [medic, activePanel]);
 
   const medicInitial =
     medic?.firstName?.charAt(0)?.toUpperCase() ||
@@ -211,12 +192,7 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
   const displayRole = resolveRole(medic);
   const avatarUrl = medic?.profilePhoto || null;
   const greeting = getShortGreeting(now.getHours());
-  const unreadCount = notifications.filter((n) => n.unread).length;
 
-  // ─── Title-aware names ────────────────────────────────────────
-  // getMedicTitle returns "" when the role isn't recognized, so we
-  // only show the prefix when it makes sense — no stray "Dr." on
-  // someone who isn't a doctor.
   const medicTitle = getMedicTitle(medic?.professionalRole);
   const nameWithTitle = (name: string) =>
     medicTitle ? `${medicTitle} ${name}` : name;
@@ -229,19 +205,63 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
   const toggleNotifications = () => setIsNotificationsOpen((p) => !p);
   const toggleMenu = () => setIsMenuOpen((p) => !p);
 
+  // ⬇ FIXED: panel navigation (was router.push — that was the 404)
+  const handlePanelNav = (panelId: string) => {
+    navigateToPanel(panelId);
+    setIsMenuOpen(false);
+    setIsNotificationsOpen(false);
+  };
+
+  const handleMarkRead = async (id: string) => {
+    if (busyNotif === id) return;
+    setBusyNotif(id);
+    try {
+      await authPost(`/api/medic/notifications/${id}/read`);
+      await refreshNotifs();
+      refreshMedicData();
+    } catch {
+      // authPost handles 401 redirects
+    } finally {
+      setBusyNotif(null);
+    }
+  };
+
+  const handleMarkAllRead = async () => {
+    setBusyNotif("__all__");
+    try {
+      await authPost(`/api/medic/notifications/read-all`);
+      await refreshNotifs();
+      refreshMedicData();
+    } catch {
+      // swallow — authPost handles 401
+    } finally {
+      setBusyNotif(null);
+    }
+  };
+
+  // ⬇ FIXED: this is the notification tap that was 404-ing
+  const handleNotificationClick = async (n: any) => {
+    if (!n.read && n.id) {
+      await handleMarkRead(n.id);
+    }
+    if (n.appointmentId) {
+      handlePanelNav("appointments");
+    } else {
+      setIsNotificationsOpen(false);
+    }
+  };
+
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await fetch("/api/medic/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      }).catch(() => {});
+      await signOut(auth).catch(() => {});
     } finally {
       clearMedicSession();
       router.push("/");
     }
-  };
-
-  const navigate = (href: string) => {
-    router.push(href);
-    setIsMenuOpen(false);
-    setIsNotificationsOpen(false);
   };
 
   // ════════════════════════════════════════════════════════════════
@@ -252,7 +272,6 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
       <>
         <header className="sticky top-0 z-40 bg-white border-b border-slate-100 px-4 py-3">
           <div className="flex items-center justify-between">
-            {/* Left: Avatar + Greeting + Name + Role · Time */}
             <button
               onClick={toggleMenu}
               className="flex items-center gap-3 text-left min-w-0 group"
@@ -274,7 +293,6 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
 
               <div className="min-w-0 flex-1">
                 <p className="text-[15px] font-bold text-slate-900 leading-tight truncate">
-                  {/* FIX: title-aware greeting */}
                   {greeting} {displayFirstName}
                 </p>
                 <p className="text-[11px] text-slate-500 font-medium leading-snug truncate mt-0.5">
@@ -284,7 +302,6 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
               </div>
             </button>
 
-            {/* Right: Messages + Notifications */}
             <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={onMessagesToggle}
@@ -302,7 +319,11 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
               >
                 <Bell className="w-[18px] h-[18px] stroke-[2.2]" />
                 {unreadCount > 0 && (
-                  <span className="absolute top-2 right-2 w-1.5 h-1.5 bg-white rounded-full ring-2 ring-emerald-600" />
+                  <>
+                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-emerald-700 text-[10px] font-black flex items-center justify-center border border-emerald-200">
+                      {unreadCount > 9 ? "9+" : unreadCount}
+                    </span>
+                  </>
                 )}
               </button>
             </div>
@@ -345,7 +366,6 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="font-bold text-slate-900 text-lg truncate">
-                      {/* FIX: title-aware full name */}
                       {displayFullName}
                     </p>
                     {displayRole && (
@@ -382,26 +402,26 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
 
                 <div className="space-y-1">
                   <button
-                    onClick={() => navigate("/profile")}
+                    onClick={() => handlePanelNav("profile")}
                     className="w-full flex items-center gap-3 px-3 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 rounded-xl transition-colors"
                   >
                     <User className="w-4 h-4 text-slate-400" /> Profile
                   </button>
                   <button
-                    onClick={() => navigate("/verification")}
+                    onClick={() => handlePanelNav("verification")}
                     className="w-full flex items-center gap-3 px-3 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 rounded-xl transition-colors"
                   >
                     <ShieldCheck className="w-4 h-4 text-slate-400" />{" "}
                     Verification
                   </button>
                   <button
-                    onClick={() => navigate("/settings")}
+                    onClick={() => handlePanelNav("settings")}
                     className="w-full flex items-center gap-3 px-3 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 rounded-xl transition-colors"
                   >
                     <Settings className="w-4 h-4 text-slate-400" /> Settings
                   </button>
                   <button
-                    onClick={() => navigate("/help")}
+                    onClick={() => handlePanelNav("help")}
                     className="w-full flex items-center gap-3 px-3 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 rounded-xl transition-colors"
                   >
                     <HelpCircle className="w-4 h-4 text-slate-400" /> Help
@@ -443,9 +463,20 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
                   <h3 className="font-bold text-slate-900 text-lg">
                     Notifications
                   </h3>
-                  <span className="text-xs text-emerald-600 font-semibold">
-                    {unreadCount} unread
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-emerald-600 font-semibold">
+                      {unreadCount} unread
+                    </span>
+                    {unreadCount > 0 && (
+                      <button
+                        onClick={handleMarkAllRead}
+                        disabled={busyNotif === "__all__"}
+                        className="text-[10px] font-bold text-emerald-600 hover:underline disabled:opacity-50"
+                      >
+                        {busyNotif === "__all__" ? "…" : "Mark all read"}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="overflow-y-auto divide-y divide-slate-100 -mx-2">
@@ -454,29 +485,33 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
                       No notifications yet
                     </div>
                   ) : (
-                    notifications.map((n) => (
-                      <div
+                    notifications.map((n: any) => (
+                      <button
                         key={n.id}
+                        onClick={() => handleNotificationClick(n)}
                         className={cn(
-                          "px-2 py-3 flex gap-3 items-start",
-                          n.unread && "bg-emerald-50/40 rounded-lg",
+                          "w-full text-left px-2 py-3 flex gap-3 items-start rounded-lg hover:bg-slate-50 transition-colors",
+                          !n.read && "bg-emerald-50/40",
                         )}
                       >
                         <div className="p-2 bg-white rounded-lg border border-slate-100 shrink-0">
                           <Bell className="w-4 h-4 text-slate-600" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-slate-900">
-                            {n.message}
+                          <p className="text-sm font-bold text-slate-900">
+                            {n.title}
                           </p>
-                          <p className="text-[11px] text-slate-400 mt-0.5">
-                            {n.time}
+                          <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">
+                            {n.body}
+                          </p>
+                          <p className="text-[10px] text-slate-400 mt-1">
+                            {fmtAgo(n.createdAt)}
                           </p>
                         </div>
-                        {n.unread && (
+                        {!n.read && (
                           <span className="w-2 h-2 mt-1.5 bg-emerald-500 rounded-full shrink-0" />
                         )}
-                      </div>
+                      </button>
                     ))
                   )}
                 </div>
@@ -499,16 +534,13 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
       )}
     >
       <div className="flex items-center justify-between px-6 py-3 max-w-7xl mx-auto">
-        {/* Left: page title */}
         <div className="min-w-0">
           <h1 className={cn("text-xl text-slate-900", bebasNeue.className)}>
             {currentPage}
           </h1>
         </div>
 
-        {/* Right: actions */}
         <div className="flex items-center gap-2" ref={dropdownRef}>
-          {/* Live clock pill */}
           <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200/60">
             <span className="text-[11px] font-bold text-slate-700 tabular-nums">
               {timeLabel}
@@ -528,7 +560,9 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
             >
               <Bell className="w-5 h-5 text-slate-600" />
               {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white" />
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center border-2 border-white">
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
               )}
             </button>
 
@@ -551,38 +585,52 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
                       </p>
                     </div>
                     {unreadCount > 0 && (
-                      <button className="text-[10px] font-bold text-emerald-600 hover:underline">
-                        Mark all read
+                      <button
+                        onClick={handleMarkAllRead}
+                        disabled={busyNotif === "__all__"}
+                        className="text-[10px] font-bold text-emerald-600 hover:underline disabled:opacity-50"
+                      >
+                        {busyNotif === "__all__" ? "…" : "Mark all read"}
                       </button>
                     )}
                   </div>
                   <div className="max-h-80 overflow-y-auto">
-                    {notifications.map((n) => (
-                      <div
-                        key={n.id}
-                        className={cn(
-                          "p-4 border-b border-slate-50 hover:bg-slate-50 transition-colors",
-                          n.unread && "bg-emerald-50/50",
-                        )}
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="p-2 bg-white rounded-lg shadow-sm shrink-0">
-                            <Bell className="w-4 h-4 text-slate-600" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-slate-900">
-                              {n.message}
-                            </p>
-                            <p className="text-xs text-slate-400 mt-0.5">
-                              {n.time}
-                            </p>
-                          </div>
-                          {n.unread && (
-                            <span className="w-2 h-2 mt-1 bg-emerald-500 rounded-full shrink-0" />
-                          )}
-                        </div>
+                    {notifications.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-slate-500">
+                        No notifications yet
                       </div>
-                    ))}
+                    ) : (
+                      notifications.map((n: any) => (
+                        <button
+                          key={n.id}
+                          onClick={() => handleNotificationClick(n)}
+                          className={cn(
+                            "w-full text-left p-4 border-b border-slate-50 hover:bg-slate-50 transition-colors",
+                            !n.read && "bg-emerald-50/50",
+                          )}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="p-2 bg-white rounded-lg shadow-sm shrink-0">
+                              <Bell className="w-4 h-4 text-slate-600" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-slate-900">
+                                {n.title}
+                              </p>
+                              <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">
+                                {n.body}
+                              </p>
+                              <p className="text-[10px] text-slate-400 mt-1">
+                                {fmtAgo(n.createdAt)}
+                              </p>
+                            </div>
+                            {!n.read && (
+                              <span className="w-2 h-2 mt-1 bg-emerald-500 rounded-full shrink-0" />
+                            )}
+                          </div>
+                        </button>
+                      ))
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -617,7 +665,6 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
                 )}
               </div>
               <div className="hidden md:block text-left">
-                {/* FIX: title-aware first name */}
                 <p className="text-sm font-semibold text-slate-900 leading-tight">
                   {displayFirstName}
                 </p>
@@ -654,7 +701,6 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-slate-900 truncate">
-                          {/* FIX: title-aware full name */}
                           {displayMenuName}
                         </p>
                         <p className="text-xs text-slate-400 truncate">
@@ -687,25 +733,25 @@ export default function MedicHeader({ onMessagesToggle }: MedicHeaderProps) {
 
                   <div className="p-2">
                     <button
-                      onClick={() => navigate("/profile")}
+                      onClick={() => handlePanelNav("profile")}
                       className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 rounded-lg transition-colors"
                     >
                       <User className="w-4 h-4" /> Profile
                     </button>
                     <button
-                      onClick={() => navigate("/verification")}
+                      onClick={() => handlePanelNav("verification")}
                       className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 rounded-lg transition-colors"
                     >
                       <ShieldCheck className="w-4 h-4" /> Verification
                     </button>
                     <button
-                      onClick={() => navigate("/settings")}
+                      onClick={() => handlePanelNav("settings")}
                       className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 rounded-lg transition-colors"
                     >
                       <Settings className="w-4 h-4" /> Settings
                     </button>
                     <button
-                      onClick={() => navigate("/help")}
+                      onClick={() => handlePanelNav("help")}
                       className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 rounded-lg transition-colors"
                     >
                       <HelpCircle className="w-4 h-4" /> Help

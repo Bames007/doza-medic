@@ -3,6 +3,8 @@
 
 import { useEffect, useState, useRef } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { signOut } from "firebase/auth";
 import {
   Settings,
   HelpCircle,
@@ -19,6 +21,8 @@ import { getMedicNavigation } from "./config/medic-nav";
 import { useMedic } from "./DashboardContext";
 import { poppins, bebasNeue } from "@/app/utils/constants";
 import { cn } from "@/app/utils/utils";
+import { auth } from "@/app/utils/firebaseConfig";
+import { clearMedicSession } from "./utils/medicSession";
 
 interface MedicSidebarProps {
   onMessagesToggle?: () => void;
@@ -26,6 +30,7 @@ interface MedicSidebarProps {
 
 export default function MedicSidebar({ onMessagesToggle }: MedicSidebarProps) {
   const { medic, logout, activePanel, navigateToPanel } = useMedic();
+  const router = useRouter();
 
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -88,7 +93,6 @@ export default function MedicSidebar({ onMessagesToggle }: MedicSidebarProps) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  // ── Use panelId now, not href ────────────────────────────────
   const isActive = (panelId: string) => activePanel === panelId;
 
   const userInitial =
@@ -105,7 +109,19 @@ export default function MedicSidebar({ onMessagesToggle }: MedicSidebarProps) {
   };
 
   const handleLogout = async () => {
-    await logout();
+    try {
+      // 1. Clear the server-side __session cookie
+      await fetch("/api/medic/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      }).catch(() => {});
+      // 2. Clear client-side Firebase auth
+      await signOut(auth).catch(() => {});
+    } finally {
+      // 3. Clear local medic session + redirect
+      clearMedicSession();
+      router.push("/");
+    }
   };
 
   const handleMessagesToggle = () => {
@@ -300,7 +316,7 @@ export default function MedicSidebar({ onMessagesToggle }: MedicSidebarProps) {
         </button>
       </div>
 
-      {/* min-h-0 is the key: it lets this flex child actually honor overflow-y-auto */}
+      {/* min-h-0 lets the flex child honor overflow-y-auto */}
       <nav className="flex-1 min-h-0 pl-4 pr-3 space-y-1 overflow-y-auto custom-scrollbar scroll-smooth">
         <p className="text-[9px] font-black text-emerald-200 uppercase tracking-[0.2em] px-2 mb-3">
           Menu

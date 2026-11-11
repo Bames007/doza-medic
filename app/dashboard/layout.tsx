@@ -6,6 +6,7 @@ import { MedicProvider } from "./DashboardContext"; // ← the context file with
 import MedicSidebar from "./DashboardSideBar";
 import MedicHeader from "./DashboardHeader";
 import PanelRenderer from "./PanelRenderer";
+import MedicNotificationToast from "./components/MedicNotificationToast";
 
 export default function MedicDashboardLayout() {
   const [messagesOpen, setMessagesOpen] = useState(false);
@@ -21,6 +22,7 @@ export default function MedicDashboardLayout() {
           </main>
         </div>
       </div>
+      <MedicNotificationToast />
     </MedicProvider>
   );
 }

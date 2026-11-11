@@ -12,6 +12,11 @@ import VerificationPanel from "./panels/VerificationPanel";
 import DashboardPanel from "./panels/DashboardPanel";
 import UpdateProfile from "./panels/ProfilePanel";
 import AppointmentsPanel from "./panels/AppointmentPanel";
+import EarningsPanel from "./panels/EarningsPanel";
+import PatientsPanel from "./panels/PatientsPanel";
+import ReviewsPanel from "./panels/ReviewsPanel";
+import ServicesPanel from "./panels/ServicesPanel";
+import AvailabilityPanel from "./panels/AvailabilityPanel";
 
 // import AppointmentsPanel from "./AppointmentsPanel";
 // import MessagesPanel from "./MessagesPanel";
@@ -100,7 +105,7 @@ export default function PanelRenderer() {
       // ─── Clinical ────────────────────────────────────────────
       case "patients":
         // return <PatientsPanel />;
-        return <NotFoundPanel panel="patients" />;
+        return <PatientsPanel />;
 
       case "records":
         // return <MedicalRecordsPanel />;
@@ -121,19 +126,19 @@ export default function PanelRenderer() {
       // ─── Practice ────────────────────────────────────────────
       case "availability":
         // return <AvailabilityPanel />;
-        return <NotFoundPanel panel="availability" />;
+        return <AvailabilityPanel />;
 
       case "services":
         // return <ServicesPanel />;
-        return <NotFoundPanel panel="services" />;
+        return <ServicesPanel />;
 
       case "earnings":
         // return <EarningsPanel />;
-        return <NotFoundPanel panel="earnings" />;
+        return <EarningsPanel />;
 
       case "reviews":
         // return <ReviewsPanel />;
-        return <NotFoundPanel panel="reviews" />;
+        return <ReviewsPanel />;
 
       // ─── Account ─────────────────────────────────────────────
       case "profile":

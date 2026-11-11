@@ -1,4 +1,4 @@
-// app/dashboard/panels/AppointmentsPanel.tsx
+// app/medic/dashboard/panels/AppointmentsPanel.tsx
 "use client";
 
 import { useMemo, useState } from "react";
@@ -16,128 +16,44 @@ import {
   PlayCircle,
   CheckCircle2,
   XCircle,
-  AlertCircle,
   Search,
-  TrendingUp,
+  Star,
+  Loader2,
+  AlertCircle,
 } from "lucide-react";
 import { cn } from "@/app/utils/utils";
 import { poppins, bebasNeue } from "@/app/utils/constants";
 import AppointmentCalendar from "../components/AppointmentCalendarPanel";
 import AddAppointmentModal from "../components/AddAppointmentModal";
-import type {
-  Appointment,
-  AppointmentStatus,
-  AppointmentType,
-} from "../type/appointment";
-const seedAppointments = (): Appointment[] => {
-  const now = new Date();
+import ChatPanel from "../components/ChatPanel";
+import { useMedicAppointments, refreshMedicData } from "../hooks/useMedicData";
 
-  // FIX: return startTime / endTime so the spread matches Appointment
-  const mk = (
-    dayOffset: number,
-    hour: number,
-    min: number,
-    minutes: number,
-  ): { startTime: string; endTime: string } => {
-    const s = new Date(now);
-    s.setDate(s.getDate() + dayOffset);
-    s.setHours(hour, min, 0, 0);
-    const e = new Date(s.getTime() + minutes * 60_000);
-    return { startTime: s.toISOString(), endTime: e.toISOString() };
-  };
+type AppointmentType = "video" | "in-person" | "home";
+type AppointmentStatus = "upcoming" | "ongoing" | "completed" | "cancelled";
 
-  return [
-    // Ongoing
-    {
-      id: "a1",
-      patientName: "John Smith",
-      patientAge: 42,
-      type: "video",
-      status: "ongoing",
-      ...mk(0, now.getHours(), now.getMinutes() - 10, 30),
-      durationMinutes: 30,
-      reason: "Follow-up consultation",
-    },
-    // Upcoming today
-    {
-      id: "a2",
-      patientName: "Amara Okafor",
-      patientAge: 34,
-      type: "in-person",
-      status: "upcoming",
-      ...mk(0, 14, 30, 30),
-      durationMinutes: 30,
-      reason: "Annual check-up",
-      location: "Room 204",
-    },
-    {
-      id: "a3",
-      patientName: "Tunde Bakare",
-      patientAge: 58,
-      type: "home",
-      status: "upcoming",
-      ...mk(0, 16, 0, 45),
-      durationMinutes: 45,
-      reason: "Post-op review",
-      location: "12 Marina Close, Ikoyi",
-    },
-    // Tomorrow
-    {
-      id: "a4",
-      patientName: "Chioma Nwosu",
-      patientAge: 27,
-      type: "video",
-      status: "upcoming",
-      ...mk(1, 9, 0, 30),
-      durationMinutes: 30,
-      reason: "Prescription review",
-    },
-    {
-      id: "a5",
-      patientName: "Ibrahim Yusuf",
-      patientAge: 65,
-      type: "in-person",
-      status: "upcoming",
-      ...mk(1, 11, 30, 30),
-      durationMinutes: 30,
-      reason: "Blood pressure check",
-      location: "Room 102",
-    },
-    // Yesterday — completed
-    {
-      id: "a6",
-      patientName: "Grace Adeleke",
-      patientAge: 51,
-      type: "video",
-      status: "completed",
-      ...mk(-1, 10, 0, 30),
-      durationMinutes: 30,
-      reason: "Diabetes management",
-    },
-    {
-      id: "a7",
-      patientName: "Kelechi Obiora",
-      patientAge: 38,
-      type: "in-person",
-      status: "completed",
-      ...mk(-1, 13, 0, 45),
-      durationMinutes: 45,
-      reason: "Skin rash consultation",
-      location: "Room 205",
-    },
-    // 3 days ago — cancelled
-    {
-      id: "a8",
-      patientName: "Fatima Bello",
-      patientAge: 30,
-      type: "video",
-      status: "cancelled",
-      ...mk(-3, 15, 0, 30),
-      durationMinutes: 30,
-      reason: "Rescheduled by patient",
-    },
-  ];
-};
+interface MedicAppointment {
+  id: string;
+  patientId: string | null;
+  patientName: string;
+  patientAge: number | null;
+  patientProfileImage: string | null;
+  type: AppointmentType;
+  status: AppointmentStatus;
+  storedStatus: string;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  reason: string;
+  location?: string;
+  consultType: "online" | "inPerson";
+  amount: number | null;
+  paymentReference: string | null;
+  rating: number | null;
+  comment: string | null;
+  source: "patient_booking" | "medic_created";
+  hasMessages: boolean;
+  createdAt: string;
+}
 
 type ViewMode = "list" | "calendar";
 type Filter = "all" | "upcoming" | "ongoing" | "past";
@@ -149,7 +65,6 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: "past", label: "Past" },
 ];
 
-// ─── Helpers ──────────────────────────────────────────────────────
 const pad = (n: number) => n.toString().padStart(2, "0");
 const toDayKey = (d: Date) =>
   `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -161,30 +76,17 @@ function dayLabel(dayKey: string) {
   tomorrow.setDate(tomorrow.getDate() + 1);
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
-
   if (dayKey === today) return "Today";
   if (dayKey === toDayKey(tomorrow)) return "Tomorrow";
   if (dayKey === toDayKey(yesterday)) return "Yesterday";
-
-  const d = new Date(dayKey + "T00:00:00");
-  return d.toLocaleDateString("en-US", {
+  return new Date(dayKey + "T00:00:00").toLocaleDateString("en-US", {
     weekday: "long",
     month: "short",
     day: "numeric",
   });
 }
 
-function timeRange(start: string, end: string) {
-  const fmt = (iso: string) =>
-    new Date(iso).toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-  return `${fmt(start)} – ${fmt(end)}`;
-}
-
-const APPT_TYPE_META: Record<
+const TYPE_META: Record<
   AppointmentType,
   { label: string; icon: React.ElementType }
 > = {
@@ -217,15 +119,32 @@ const STATUS_META: Record<
 
 // ═════════════════════════════════════════════════════════════════
 export default function AppointmentsPanel() {
-  const [appointments, setAppointments] =
-    useState<Appointment[]>(seedAppointments);
+  const { appointments, isLoading, error, mutate } = useMedicAppointments();
   const [view, setView] = useState<ViewMode>("list");
   const [filter, setFilter] = useState<Filter>("all");
   const [selectedDate, setSelectedDate] = useState<string>(todayKey());
   const [addOpen, setAddOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [activeChat, setActiveChat] = useState<string | null>(null);
 
-  // ── Filtering ─────────────────────────────────────────────────
+  // Shape appointments to the calendar's expected type
+  const calendarAppointments = useMemo(
+    () =>
+      appointments.map((a) => ({
+        id: a.id,
+        patientName: a.patientName,
+        patientAge: a.patientAge ?? undefined,
+        type: a.type,
+        status: a.status,
+        startTime: a.startTime,
+        endTime: a.endTime,
+        durationMinutes: a.durationMinutes,
+        reason: a.reason,
+        location: a.location,
+      })),
+    [appointments],
+  );
+
   const filtered = useMemo(() => {
     let list = [...appointments];
 
@@ -247,7 +166,6 @@ export default function AppointmentsPanel() {
       );
     }
 
-    // Calendar view respects the selected day
     if (view === "calendar") {
       list = list.filter(
         (a) => toDayKey(new Date(a.startTime)) === selectedDate,
@@ -261,9 +179,8 @@ export default function AppointmentsPanel() {
     return list;
   }, [appointments, filter, query, view, selectedDate]);
 
-  // Group by day for the list view
   const grouped = useMemo(() => {
-    const map: Record<string, Appointment[]> = {};
+    const map: Record<string, MedicAppointment[]> = {};
     filtered.forEach((a) => {
       const key = toDayKey(new Date(a.startTime));
       if (!map[key]) map[key] = [];
@@ -272,11 +189,11 @@ export default function AppointmentsPanel() {
     return Object.entries(map).sort(([a], [b]) => a.localeCompare(b));
   }, [filtered]);
 
-  // Stats
   const stats = useMemo(() => {
     const today = todayKey();
     const todayCount = appointments.filter(
-      (a) => toDayKey(new Date(a.startTime)) === today,
+      (a) =>
+        toDayKey(new Date(a.startTime)) === today && a.status !== "cancelled",
     ).length;
     const upcomingCount = appointments.filter(
       (a) => a.status === "upcoming",
@@ -287,19 +204,14 @@ export default function AppointmentsPanel() {
     return { todayCount, upcomingCount, completedCount };
   }, [appointments]);
 
-  // ── Handlers ──────────────────────────────────────────────────
-  const handleSave = (draft: Omit<Appointment, "id" | "status">) => {
-    const newAppt: Appointment = {
-      ...draft,
-      id: `local-${Date.now()}`,
-      status: "upcoming",
-    };
-    setAppointments((prev) => [newAppt, ...prev]);
+  const handleSaveSuccess = async () => {
+    await mutate();
+    refreshMedicData();
   };
 
   return (
     <div className={cn("pb-28 lg:pb-8", poppins.className)}>
-      {/* ═══ Header ═══════════════════════════════════════════ */}
+      {/* Header */}
       <div className="px-4 lg:px-8 pt-4 lg:pt-8">
         <div className="flex items-end justify-between gap-4">
           <div>
@@ -315,8 +227,6 @@ export default function AppointmentsPanel() {
               APPOINTMENTS
             </h1>
           </div>
-
-          {/* Desktop add button */}
           <button
             type="button"
             onClick={() => setAddOpen(true)}
@@ -327,7 +237,6 @@ export default function AppointmentsPanel() {
           </button>
         </div>
 
-        {/* Stats row */}
         <div className="grid grid-cols-3 gap-2 sm:gap-3 mt-5 max-w-2xl">
           <MiniStat label="Today" value={stats.todayCount} />
           <MiniStat label="Upcoming" value={stats.upcomingCount} />
@@ -335,10 +244,9 @@ export default function AppointmentsPanel() {
         </div>
       </div>
 
-      {/* ═══ Toolbar: view toggle + search + filter tabs ══════ */}
+      {/* Toolbar */}
       <div className="px-4 lg:px-8 mt-6">
         <div className="flex items-center gap-2 flex-wrap">
-          {/* View toggle */}
           <div className="inline-flex p-1 rounded-2xl bg-slate-100 border border-slate-200">
             <ViewToggle
               active={view === "list"}
@@ -353,8 +261,6 @@ export default function AppointmentsPanel() {
               label="Calendar"
             />
           </div>
-
-          {/* Search */}
           <div className="relative flex-1 min-w-[180px] max-w-sm">
             <Search
               size={15}
@@ -370,7 +276,6 @@ export default function AppointmentsPanel() {
           </div>
         </div>
 
-        {/* Filter tabs */}
         <div className="mt-4 flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 lg:mx-0 lg:px-0">
           {FILTERS.map((f) => {
             const active = filter === f.id;
@@ -393,114 +298,149 @@ export default function AppointmentsPanel() {
         </div>
       </div>
 
-      {/* ═══ Body ═════════════════════════════════════════════ */}
+      {/* Body */}
       <div className="px-4 lg:px-8 mt-6 max-w-4xl">
-        <AnimatePresence mode="wait">
-          {view === "calendar" ? (
-            <motion.div
-              key="calendar"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.18 }}
-              className="space-y-5"
-            >
-              <AppointmentCalendar
-                appointments={appointments}
-                selectedDate={selectedDate}
-                onSelectDate={setSelectedDate}
+        {error && (
+          <div className="flex items-start gap-2 p-4 mb-4 bg-rose-50 border border-rose-100 rounded-2xl text-sm text-rose-700">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>
+              Could not load appointments. Pull to refresh or try again.
+            </span>
+          </div>
+        )}
+
+        {isLoading && appointments.length === 0 ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="h-32 bg-white rounded-2xl border border-slate-100 animate-pulse"
               />
-
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 mb-3">
-                  {dayLabel(selectedDate)}
-                </p>
-
-                {filtered.length === 0 ? (
-                  <EmptyState
-                    title="No appointments on this day"
-                    subtitle="Tap the + button to schedule one."
-                  />
-                ) : (
-                  <div className="space-y-3">
-                    {filtered.map((a) => (
-                      <AppointmentCard key={a.id} appointment={a} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="list"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.18 }}
-              className="space-y-6"
-            >
-              {grouped.length === 0 ? (
-                <EmptyState
-                  title="No appointments found"
-                  subtitle={
-                    query
-                      ? "Try a different search."
-                      : "Schedule your first appointment."
-                  }
+            ))}
+          </div>
+        ) : (
+          <AnimatePresence mode="wait">
+            {view === "calendar" ? (
+              <motion.div
+                key="calendar"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.18 }}
+                className="space-y-5"
+              >
+                <AppointmentCalendar
+                  appointments={calendarAppointments as any}
+                  selectedDate={selectedDate}
+                  onSelectDate={setSelectedDate}
                 />
-              ) : (
-                grouped.map(([dayKey, list]) => (
-                  <section key={dayKey}>
-                    <div className="flex items-center gap-3 mb-3">
-                      <p
-                        className={cn(
-                          "text-base font-bold text-slate-900",
-                          bebasNeue.className,
-                        )}
-                      >
-                        {dayLabel(dayKey).toUpperCase()}
-                      </p>
-                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                        {list.length} {list.length === 1 ? "item" : "items"}
-                      </span>
-                      <div className="h-px flex-1 bg-slate-100" />
-                    </div>
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 mb-3">
+                    {dayLabel(selectedDate)}
+                  </p>
+                  {filtered.length === 0 ? (
+                    <EmptyState
+                      title="No appointments on this day"
+                      subtitle="Tap + to schedule one."
+                    />
+                  ) : (
                     <div className="space-y-3">
-                      {list.map((a) => (
-                        <AppointmentCard key={a.id} appointment={a} />
+                      {filtered.map((a) => (
+                        <AppointmentCard
+                          key={a.id}
+                          appointment={a}
+                          onOpenChat={setActiveChat}
+                        />
                       ))}
                     </div>
-                  </section>
-                ))
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
+                  )}
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="list"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.18 }}
+                className="space-y-6"
+              >
+                {grouped.length === 0 ? (
+                  <EmptyState
+                    title="No appointments found"
+                    subtitle={
+                      query
+                        ? "Try a different search."
+                        : "New bookings from patients will appear here."
+                    }
+                  />
+                ) : (
+                  grouped.map(([dayKey, list]) => (
+                    <section key={dayKey}>
+                      <div className="flex items-center gap-3 mb-3">
+                        <p
+                          className={cn(
+                            "text-base font-bold text-slate-900",
+                            bebasNeue.className,
+                          )}
+                        >
+                          {dayLabel(dayKey).toUpperCase()}
+                        </p>
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                          {list.length} {list.length === 1 ? "item" : "items"}
+                        </span>
+                        <div className="h-px flex-1 bg-slate-100" />
+                      </div>
+                      <div className="space-y-3">
+                        {list.map((a) => (
+                          <AppointmentCard
+                            key={a.id}
+                            appointment={a}
+                            onOpenChat={setActiveChat}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ))
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        )}
       </div>
 
-      {/* ═══ Mobile FAB ══════════════════════════════════════ */}
+      {/* FAB */}
       <button
         type="button"
         onClick={() => setAddOpen(true)}
         className="sm:hidden fixed bottom-6 right-6 z-30 flex items-center gap-2 px-5 py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-2xl shadow-emerald-500/30 active:scale-95 transition-all"
         aria-label="New appointment"
       >
-        <Plus size={18} />
-        New
+        <Plus size={18} /> New
       </button>
 
-      {/* ═══ Add modal ═══════════════════════════════════════ */}
       <AddAppointmentModal
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        onSave={handleSave}
+        onSuccess={handleSaveSuccess}
       />
+
+      <AnimatePresence>
+        {activeChat && (
+          <ChatPanel
+            appointmentId={activeChat}
+            onClose={() => {
+              setActiveChat(null);
+              refreshMedicData();
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 // ─── Sub-components ──────────────────────────────────────────────
-
 function MiniStat({ label, value }: { label: string; value: number }) {
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 sm:p-4">
@@ -542,11 +482,18 @@ function ViewToggle({
   );
 }
 
-function AppointmentCard({ appointment }: { appointment: Appointment }) {
-  const typeMeta = APPT_TYPE_META[appointment.type];
+function AppointmentCard({
+  appointment,
+  onOpenChat,
+}: {
+  appointment: MedicAppointment;
+  onOpenChat: (id: string) => void;
+}) {
+  const typeMeta = TYPE_META[appointment.type];
   const statusMeta = STATUS_META[appointment.status];
   const TypeIcon = typeMeta.icon;
   const isOngoing = appointment.status === "ongoing";
+  const isBooked = appointment.source === "patient_booking";
 
   const start = new Date(appointment.startTime);
   const timeStr = start.toLocaleTimeString("en-US", {
@@ -554,6 +501,14 @@ function AppointmentCard({ appointment }: { appointment: Appointment }) {
     minute: "2-digit",
     hour12: true,
   });
+
+  const initials = appointment.patientName
+    .split(" ")
+    .map((s) => s[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 
   return (
     <motion.div
@@ -566,7 +521,6 @@ function AppointmentCard({ appointment }: { appointment: Appointment }) {
           : "border-slate-100 hover:border-emerald-100",
       )}
     >
-      {/* Top row: time + status */}
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="flex items-center gap-2 min-w-0">
           <div className="shrink-0 flex items-center gap-1.5 text-xs font-bold text-slate-700 tabular-nums">
@@ -578,7 +532,6 @@ function AppointmentCard({ appointment }: { appointment: Appointment }) {
             {appointment.durationMinutes}m
           </span>
         </div>
-
         <span
           className={cn(
             "shrink-0 inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full border",
@@ -595,32 +548,45 @@ function AppointmentCard({ appointment }: { appointment: Appointment }) {
         </span>
       </div>
 
-      {/* Patient + reason */}
       <div className="flex items-start gap-3">
         <div
           className={cn(
-            "shrink-0 w-11 h-11 rounded-xl flex items-center justify-center font-black text-sm",
+            "shrink-0 w-11 h-11 rounded-xl flex items-center justify-center font-black text-sm overflow-hidden",
             isOngoing
               ? "bg-emerald-600 text-white"
               : "bg-emerald-50 text-emerald-700",
           )}
         >
-          {appointment.patientName
-            .split(" ")
-            .map((s) => s[0])
-            .slice(0, 2)
-            .join("")
-            .toUpperCase()}
+          {appointment.patientProfileImage ? (
+            <img
+              src={appointment.patientProfileImage}
+              alt={appointment.patientName}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            initials
+          )}
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-bold text-slate-900 truncate">
               {appointment.patientName}
             </p>
-            {appointment.patientAge && (
+            {appointment.patientAge != null && (
               <span className="text-[10px] text-slate-400 font-bold shrink-0">
                 {appointment.patientAge}y
+              </span>
+            )}
+            {isBooked && (
+              <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-600 text-white shrink-0">
+                Booked
+              </span>
+            )}
+            {appointment.rating != null && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-700 shrink-0">
+                <Star size={10} className="fill-amber-400 text-amber-400" />
+                {appointment.rating}
               </span>
             )}
           </div>
@@ -639,60 +605,51 @@ function AppointmentCard({ appointment }: { appointment: Appointment }) {
                 <span className="truncate">{appointment.location}</span>
               </span>
             )}
+            {appointment.amount ? (
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 tabular-nums">
+                ₦{Number(appointment.amount).toLocaleString()}
+              </span>
+            ) : null}
           </div>
         </div>
-
-        {/* Action chevron */}
-        <button
-          type="button"
-          className="shrink-0 p-2 rounded-xl hover:bg-slate-50 text-slate-300 hover:text-emerald-600 transition-colors"
-          aria-label="Open details"
-        >
-          <ChevronRight size={16} />
-        </button>
       </div>
 
-      {/* Primary actions */}
-      {isOngoing && (
-        <div className="mt-4 pt-4 border-t border-emerald-100 flex items-center gap-2">
-          <button
-            type="button"
-            className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition-all"
-          >
-            <PlayCircle size={14} />
-            Join now
-          </button>
+      {/* Actions */}
+      {(isOngoing || (appointment.status === "upcoming" && isBooked)) && (
+        <div className="mt-4 pt-4 border-t border-slate-100 flex items-center gap-2">
+          {isBooked && (
+            <button
+              type="button"
+              onClick={() => onOpenChat(appointment.id)}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition-all"
+            >
+              <PlayCircle size={14} />
+              {isOngoing ? "Join chat" : "Open chat"}
+            </button>
+          )}
           <button
             type="button"
             className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-white border border-slate-200 hover:border-emerald-300 text-slate-600 font-bold text-xs transition-all"
           >
-            Reschedule
+            Details
+            <ChevronRight size={12} />
           </button>
         </div>
       )}
-
-      {appointment.status === "upcoming" &&
-        isSameDay(new Date(appointment.startTime), new Date()) && (
-          <div className="mt-4 pt-4 border-t border-slate-100 flex items-center gap-2">
-            <button
-              type="button"
-              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-white border border-slate-200 hover:border-emerald-300 text-slate-700 font-bold text-xs transition-all"
-            >
-              Reschedule
-            </button>
-            <button
-              type="button"
-              className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-all"
-            >
-              Start
-            </button>
-          </div>
-        )}
 
       {appointment.status === "completed" && (
         <div className="mt-3 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-600">
           <CheckCircle2 size={12} />
           Completed
+          {isBooked && (
+            <button
+              type="button"
+              onClick={() => onOpenChat(appointment.id)}
+              className="ml-auto text-emerald-600 hover:text-emerald-700 normal-case tracking-normal font-bold"
+            >
+              View chat →
+            </button>
+          )}
         </div>
       )}
 
@@ -717,8 +674,3 @@ function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
     </div>
   );
 }
-
-const isSameDay = (a: Date, b: Date) =>
-  a.getFullYear() === b.getFullYear() &&
-  a.getMonth() === b.getMonth() &&
-  a.getDate() === b.getDate();

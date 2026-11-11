@@ -1,3 +1,4 @@
+// app/login/page.tsx
 "use client";
 
 import React, { useState, useEffect } from "react";
@@ -11,32 +12,49 @@ import {
   RefreshCw,
   ArrowRight,
   ChevronLeft,
+  Stethoscope,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { bebasNeue, poppins } from "./utils/constants";
 import Image from "next/image";
-import LoadingScreen from "./components/LoadingScreen";
+import { signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { ref, get } from "firebase/database";
+import { auth, db } from "@/app/utils/firebaseConfig";
+import { bebasNeue, poppins } from "@/app/utils/constants";
+import BubbleTransition from "./components/BubbleTransitions";
+import { getMedicSession, saveMedicSession } from "./utils/medicSession";
 
-const LoginPage: React.FC = () => {
+const MedicLoginPage: React.FC = () => {
   const [mounted, setMounted] = useState(false);
-  const [formData, setFormData] = useState({
-    email: "",
-    password: "",
-  });
+  const [formData, setFormData] = useState({ email: "", password: "" });
   const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [fieldErrors, setFieldErrors] = useState({
-    email: "",
-    password: "",
-  });
+  const [fieldErrors, setFieldErrors] = useState({ email: "", password: "" });
+
+  // ── Bubble coordination state ──
+  const [showBubble, setShowBubble] = useState(false);
+  const [bubbleDone, setBubbleDone] = useState(false);
+  const [loginResult, setLoginResult] = useState<"success" | "error" | null>(
+    null,
+  );
+  const [submitting, setSubmitting] = useState(false);
 
   const router = useRouter();
 
-  // ─── Defer client‑side rendering ─────────────────────────────
+  useEffect(() => setMounted(true), []);
+
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    const existing = getMedicSession();
+    if (existing) router.replace("/dashboard");
+  }, [router]);
+
+  // ── Navigate once bubble is done AND login succeeded ──
+  useEffect(() => {
+    if (!bubbleDone) return;
+    if (loginResult === "success") {
+      router.push("/dashboard");
+    }
+    // For "error", the handleLogin catch already called setShowBubble(false)
+  }, [bubbleDone, loginResult, router]);
 
   if (!mounted) {
     return (
@@ -45,10 +63,6 @@ const LoginPage: React.FC = () => {
       </div>
     );
   }
-
-  // ─── Hardcoded credentials ────────────────────────────────────
-  const VALID_EMAIL = "eddybames007@gmail.com";
-  const VALID_PASSWORD = "1234567890";
 
   const validateField = (name: string, value: string): string => {
     switch (name) {
@@ -68,118 +82,199 @@ const LoginPage: React.FC = () => {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
-
+    setFormData((p) => ({ ...p, [name]: value }));
     setError("");
-    const fieldError = validateField(name, value);
-    setFieldErrors((prev) => ({
-      ...prev,
-      [name]: fieldError,
-    }));
+    setFieldErrors((p) => ({ ...p, [name]: validateField(name, value) }));
   };
 
   const handleInputBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    const fieldError = validateField(name, value);
-    setFieldErrors((prev) => ({
-      ...prev,
-      [name]: fieldError,
-    }));
+    setFieldErrors((p) => ({ ...p, [name]: validateField(name, value) }));
   };
 
-  const hasErrors = () => {
-    return (
-      Object.values(fieldErrors).some((error) => error !== "") ||
-      !formData.email.trim() ||
-      !formData.password.trim()
-    );
+  const hasErrors = () =>
+    Object.values(fieldErrors).some((v) => v !== "") ||
+    !formData.email.trim() ||
+    !formData.password.trim();
+
+  const friendlyAuthError = (code?: string): string => {
+    switch (code) {
+      case "auth/invalid-credential":
+      case "auth/wrong-password":
+      case "auth/user-not-found":
+        return "Invalid email or password.";
+      case "auth/invalid-email":
+        return "That email address isn't valid.";
+      case "auth/user-disabled":
+        return "This account has been disabled. Contact support@doza.com.";
+      case "auth/too-many-requests":
+        return "Too many attempts. Please try again in a few minutes.";
+      case "auth/network-request-failed":
+        return "Network error. Check your connection and try again.";
+      default:
+        return "Login failed. Please try again.";
+    }
   };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     setError("");
 
-    setFieldErrors({
-      email: "",
-      password: "",
-    });
-
-    const newFieldErrors = {
+    const freshErrors = {
       email: validateField("email", formData.email),
       password: validateField("password", formData.password),
     };
-    setFieldErrors(newFieldErrors);
+    setFieldErrors(freshErrors);
+    if (Object.values(freshErrors).some((v) => v !== "")) return;
 
-    if (Object.values(newFieldErrors).some((error) => error !== "")) {
-      setLoading(false);
-      return;
-    }
+    // ── Show the bubble + disable the form ──
+    setSubmitting(true);
+    setShowBubble(true);
+    setBubbleDone(false);
+    setLoginResult(null);
 
-    const { email, password } = formData;
-    if (email.trim() !== VALID_EMAIL || password.trim() !== VALID_PASSWORD) {
-      setError("Invalid email or password. Please try again.");
-      setLoading(false);
-      return;
-    }
-
-    // Simulate API delay
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    const email = formData.email.trim().toLowerCase();
 
     try {
-      const dummyUser = {
-        id: "dummy-user-id",
-        email: email.trim(),
-        fullName: "Eddy Bames",
-        role: "ceo", // valid admin role
-      };
+      // ── 1. Firebase Auth ──
+      let uid: string;
+      let idToken: string;
+      try {
+        const cred = await signInWithEmailAndPassword(
+          auth,
+          email,
+          formData.password,
+        );
+        uid = cred.user.uid;
+        idToken = await cred.user.getIdToken();
+      } catch (authErr: any) {
+        // Hide bubble immediately on auth failure
+        setShowBubble(false);
+        setSubmitting(false);
+        setError(friendlyAuthError(authErr?.code));
+        return;
+      }
 
-      const sessionWithExpiry = {
-        user: dummyUser,
-        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-        lastActivity: Date.now(),
-      };
+      // ── 2. Mint the __session cookie ──
+      try {
+        const cookieRes = await fetch("/api/medic/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idToken }),
+          credentials: "include",
+        });
 
-      localStorage.setItem("adminSession", JSON.stringify(sessionWithExpiry));
-      localStorage.setItem(
-        "authToken",
-        `doza-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      );
-      localStorage.setItem("loginTime", new Date().toISOString());
-      localStorage.setItem("lastActivity", Date.now().toString());
-
-      // Handle logout in other tabs
-      window.addEventListener("storage", (e) => {
-        if (e.key === "logout") {
-          localStorage.clear();
-          sessionStorage.clear();
-          window.location.href = "/";
+        if (!cookieRes.ok) {
+          const err = await cookieRes.json().catch(() => ({}));
+          await signOut(auth);
+          setShowBubble(false);
+          setSubmitting(false);
+          setError(err.error || "Could not establish session. Try again.");
+          return;
         }
+      } catch {
+        await signOut(auth);
+        setShowBubble(false);
+        setSubmitting(false);
+        setError("Could not establish session. Try again.");
+        return;
+      }
+
+      // ── 3. Load medic profile ──
+      const snap = await get(ref(db, `doza_medics/${uid}`));
+      if (!snap.exists()) {
+        await signOut(auth);
+        setShowBubble(false);
+        setSubmitting(false);
+        setError("No Doza Medic profile linked to this account.");
+        return;
+      }
+
+      const r = snap.val();
+
+      if (r.status === "suspended" || r.status === "rejected") {
+        await signOut(auth);
+        setShowBubble(false);
+        setSubmitting(false);
+        setError(`Your account is ${r.status}. Contact support@doza.com.`);
+        return;
+      }
+
+      const medic = {
+        id: uid,
+        email: r.personalInfo?.email || email,
+        firstName: r.personalInfo?.firstName || "",
+        lastName: r.personalInfo?.lastName || "",
+        fullName:
+          `${r.personalInfo?.firstName ?? ""} ${r.personalInfo?.lastName ?? ""}`.trim() ||
+          email,
+        phone: r.personalInfo?.phone || "",
+        gender: r.personalInfo?.gender || "",
+        profilePhoto: r.personalInfo?.profilePhoto ?? null,
+        professionalRole: r.professionalInfo?.role || "",
+        specialties: r.professionalInfo?.specialties ?? [],
+        licenseNumber: r.professionalInfo?.licenseNumber || "",
+        yearsOfExperience: r.professionalInfo?.yearsOfExperience || 0,
+        consultationTypes: r.practiceInfo?.consultationTypes ?? {
+          inPerson: true,
+          online: false,
+          homeVisit: false,
+        },
+        hourlyRate: r.practiceInfo?.hourlyRate || 0,
+        availability: r.practiceInfo?.availability,
+        location: r.location,
+        verified: !!r.verified,
+        status: r.status ?? "pending",
+        profileComplete: !!r.profileComplete,
+      };
+
+      // ── 4. Save session + clear stale patient keys ──
+      saveMedicSession({
+        medic,
+        token: uid,
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       });
 
-      router.push("/dashboard"); // ✅ admin dashboard route
+      localStorage.removeItem("userSession");
+      localStorage.removeItem("userId");
+      localStorage.removeItem("userName");
+      localStorage.removeItem("userRole");
+      sessionStorage.removeItem("userSession");
+
+      // ── 5. Success — bubble stays visible until animation ends ──
+      setLoginResult("success");
+      // The useEffect above will navigate once bubbleDone is true.
+      // If the bubble animation has already finished, navigate immediately.
+      // If it hasn't, wait for onAnimationComplete.
+      // Note: we do NOT setSubmitting(false) here because we're navigating.
     } catch (err: any) {
-      setError(err.message || "Login failed. Please try again.");
-    } finally {
-      setLoading(false);
+      console.error("[/login]", err);
+      setShowBubble(false);
+      setSubmitting(false);
+      setError("Login failed. Please try again.");
     }
   };
 
   const handleGetHelp = () => {
     window.location.href =
-      "mailto:support@doza.com?subject=Login Assistance&body=Please help me with login access to my healthcare center.";
+      "mailto:dozamedichq@gmail.com?subject=Medic%20Login%20Assistance&body=Please%20help%20me%20access%20my%20Doza%20Medic%20account.";
   };
 
   return (
     <div
       className={`min-h-screen bg-slate-50 selection:bg-emerald-100 ${poppins.className}`}
     >
-      <AnimatePresence>{loading && <LoadingScreen />}</AnimatePresence>
+      {/* ── Bubble transition ── */}
+      <AnimatePresence>
+        {showBubble && (
+          <BubbleTransition
+            phase="closing"
+            duration={1.2}
+            onAnimationComplete={() => setBubbleDone(true)}
+          />
+        )}
+      </AnimatePresence>
 
-      {/* Dynamic Background Blurs */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-[10%] -left-[10%] w-[40%] h-[40%] bg-emerald-100/40 rounded-full blur-[120px]" />
         <div className="absolute -bottom-[10%] -right-[10%] w-[40%] h-[40%] bg-blue-100/40 rounded-full blur-[120px]" />
@@ -191,11 +286,9 @@ const LoginPage: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 bg-white/90 backdrop-blur-2xl rounded-[2.5rem] shadow-[0_32px_64px_-15px_rgba(0,0,0,0.05)] border border-white overflow-hidden"
         >
-          {/* LEFT COLUMN: BRANDING (Desktop) */}
+          {/* Left column — branding */}
           <div className="hidden lg:flex lg:col-span-5 bg-gradient-to-br from-emerald-600 to-teal-700 p-16 flex-col justify-between relative overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-br from-emerald-600 to-teal-700" />
             <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_1px_1px,white_1px,transparent_0)] bg-[length:32px_32px]" />
-
             <div className="relative z-10">
               <div className="flex items-center gap-3 mb-16">
                 <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-lg">
@@ -211,42 +304,38 @@ const LoginPage: React.FC = () => {
                 <span
                   className={`text-2xl tracking-tighter font-bold text-white ${bebasNeue.className}`}
                 >
-                  DOZA MEDIC
+                  DOZA
                 </span>
               </div>
-
               <h1
                 className={`text-6xl font-bold text-white leading-[0.95] mb-8 ${bebasNeue.className}`}
               >
-                ADMIN <br />
-                <span className="text-emerald-200 text-7xl">CONTROL.</span>
+                MEDIC <br />
+                <span className="text-emerald-200 text-7xl">PORTAL.</span>
               </h1>
               <p className="text-emerald-50/70 text-lg leading-relaxed max-w-sm">
-                Secure access to manage centers, users, subscriptions and more.
+                Your independent practice — patients, consults and earnings in
+                one place.
               </p>
             </div>
-
-            <div className="relative z-10 space-y-8">
-              <div className="p-6 bg-white/10 backdrop-blur-md rounded-3xl border border-white/10">
-                <div className="flex items-center gap-4 text-white">
-                  <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
-                    <Lock size={20} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold">Secure Platform</p>
-                    <p className="text-xs text-emerald-100/60">
-                      Role‑based access for Doza leaders.
-                    </p>
-                  </div>
+            <div className="relative z-10 p-6 bg-white/10 backdrop-blur-md rounded-3xl border border-white/10">
+              <div className="flex items-center gap-4 text-white">
+                <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+                  <Stethoscope size={20} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold">Private practice access</p>
+                  <p className="text-xs text-emerald-100/60">
+                    Only registered Doza Medics can sign in.
+                  </p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* RIGHT COLUMN: LOGIN FORM */}
+          {/* Right column — form */}
           <div className="lg:col-span-7 p-8 md:p-16 lg:p-20 flex flex-col justify-center bg-white/50">
             <div className="max-w-md mx-auto w-full">
-              {/* Mobile Branding */}
               <div className="lg:hidden flex items-center justify-between mb-12">
                 <div className="flex items-center gap-2">
                   <Image
@@ -269,15 +358,14 @@ const LoginPage: React.FC = () => {
                 <h2
                   className={`text-5xl font-bold text-slate-700 mb-2 ${bebasNeue.className}`}
                 >
-                  Admin Login
+                  Medic Login
                 </h2>
                 <p className="text-slate-500 font-medium">
-                  Sign in to the Doza management platform.
+                  Sign in with the email you used to register as a Doza Medic.
                 </p>
               </header>
 
-              {/* Error Handling */}
-              {(error || Object.values(fieldErrors).some((err) => err)) && (
+              {(error || Object.values(fieldErrors).some((v) => v)) && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -292,11 +380,10 @@ const LoginPage: React.FC = () => {
                       </div>
                     </div>
                   )}
-                  {Object.values(fieldErrors).some((err) => err) && (
+                  {Object.values(fieldErrors).some((v) => v) && (
                     <div className="p-3 bg-amber-50 border border-amber-100 rounded-xl">
                       <p className="text-sm font-medium text-amber-800 flex items-center gap-2">
-                        <AlertCircle className="w-4 h-4" />
-                        Please fix the following issues:
+                        <AlertCircle className="w-4 h-4" /> Please fix:
                       </p>
                       <ul className="text-xs text-amber-700 mt-1 list-disc list-inside space-y-1">
                         {fieldErrors.email && (
@@ -312,11 +399,10 @@ const LoginPage: React.FC = () => {
               )}
 
               <form onSubmit={handleLogin} className="space-y-6">
-                {/* Email Field */}
                 <div>
                   <div className="flex justify-between items-end mb-2 ml-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                      Email Address
+                      Medic Email
                     </label>
                     {fieldErrors.email && (
                       <span className="text-[10px] font-bold text-red-500 uppercase italic">
@@ -335,20 +421,19 @@ const LoginPage: React.FC = () => {
                       value={formData.email}
                       onChange={handleInputChange}
                       onBlur={handleInputBlur}
-                      className={`w-full bg-slate-100 border-2 rounded-2xl py-4 pl-12 pr-4 text-sm font-bold text-slate-900 transition-all outline-none 
-                        ${
-                          fieldErrors.email
-                            ? "border-red-200 bg-red-50/30"
-                            : "border-transparent focus:bg-white focus:border-emerald-500"
-                        }`}
-                      placeholder="Enter your registered email"
+                      disabled={submitting}
+                      className={`w-full bg-slate-100 border-2 rounded-2xl py-4 pl-12 pr-4 text-sm font-bold text-slate-900 transition-all outline-none ${
+                        fieldErrors.email
+                          ? "border-red-200 bg-red-50/30"
+                          : "border-transparent focus:bg-white focus:border-emerald-500"
+                      } disabled:opacity-60`}
+                      placeholder="you@yourpractice.com"
                       required
                       autoComplete="email"
                     />
                   </div>
                 </div>
 
-                {/* Password Field */}
                 <div>
                   <div className="flex justify-between items-end mb-2 ml-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
@@ -371,20 +456,21 @@ const LoginPage: React.FC = () => {
                       value={formData.password}
                       onChange={handleInputChange}
                       onBlur={handleInputBlur}
-                      className={`w-full bg-slate-100 border-2 rounded-2xl py-4 pl-12 pr-12 text-sm font-bold text-slate-900 transition-all outline-none 
-                        ${
-                          fieldErrors.password
-                            ? "border-red-200 bg-red-50/30"
-                            : "border-transparent focus:bg-white focus:border-emerald-500"
-                        }`}
-                      placeholder="Enter your password"
+                      disabled={submitting}
+                      className={`w-full bg-slate-100 border-2 rounded-2xl py-4 pl-12 pr-12 text-sm font-bold text-slate-900 transition-all outline-none ${
+                        fieldErrors.password
+                          ? "border-red-200 bg-red-50/30"
+                          : "border-transparent focus:bg-white focus:border-emerald-500"
+                      } disabled:opacity-60`}
+                      placeholder="••••••••"
                       required
                       autoComplete="current-password"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-600 transition-colors"
+                      disabled={submitting}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-600 transition-colors disabled:opacity-60"
                     >
                       {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
@@ -394,14 +480,14 @@ const LoginPage: React.FC = () => {
                 <motion.button
                   whileTap={{ scale: 0.98 }}
                   type="submit"
-                  disabled={loading || hasErrors()}
+                  disabled={submitting || hasErrors()}
                   className="w-full bg-slate-900 hover:bg-emerald-600 text-white font-black py-5 rounded-2xl transition-all duration-300 flex items-center justify-center gap-3 group shadow-2xl shadow-slate-900/10 disabled:opacity-50 disabled:bg-slate-300 disabled:shadow-none"
                 >
-                  {loading ? (
+                  {submitting ? (
                     <RefreshCw className="animate-spin" size={20} />
                   ) : (
                     <>
-                      ACCESS PLATFORM
+                      ENTER MEDIC PORTAL
                       <ArrowRight
                         size={18}
                         className="group-hover:translate-x-1 transition-transform"
@@ -412,36 +498,23 @@ const LoginPage: React.FC = () => {
               </form>
 
               <footer className="mt-12 text-center">
-                <div className="flex flex-wrap items-center justify-center gap-4">
-                  <button
-                    onClick={handleGetHelp}
-                    className="text-[10px] font-black text-slate-400 hover:text-slate-900 uppercase tracking-[0.2em] flex items-center gap-2 transition-colors"
-                  >
-                    <Mail size={14} /> Email Support
-                  </button>
-                  <span className="text-slate-300">•</span>
-                  <a
-                    href="tel:+2348127728084"
-                    className="text-[10px] font-black text-slate-400 hover:text-slate-900 uppercase tracking-[0.2em] flex items-center gap-2 transition-colors"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-                    </svg>{" "}
-                    Call Support
-                  </a>
-                </div>
+                <button
+                  onClick={handleGetHelp}
+                  className="text-[10px] font-black text-slate-400 hover:text-slate-900 uppercase tracking-[0.2em] flex items-center gap-2 mx-auto transition-colors"
+                >
+                  <Mail size={14} /> Medic Support
+                </button>
 
-                <div className="mt-8 pt-8 border-t border-slate-100 flex items-center justify-center">
+                <div className="mt-8 pt-8 border-t border-slate-100 flex items-center justify-center gap-6">
+                  <button
+                    onClick={() => {
+                      window.location.href =
+                        "https://dozamedic.com/registration/medic";
+                    }}
+                    className="text-[10px] font-black text-emerald-500 hover:text-emerald-700 uppercase tracking-[0.2em] transition-colors"
+                  >
+                    Register as Medic
+                  </button>
                   <button
                     onClick={() => router.push("/")}
                     className="text-[10px] font-black text-slate-400 hover:text-slate-900 uppercase tracking-[0.2em] flex items-center gap-2 transition-colors"
@@ -458,4 +531,4 @@ const LoginPage: React.FC = () => {
   );
 };
 
-export default LoginPage;
+export default MedicLoginPage;

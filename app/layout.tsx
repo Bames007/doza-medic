@@ -22,7 +22,7 @@ const poppins = Poppins({
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXTAUTH_URL || "https://dozamedic.com"),
   title: {
-    default: "Doza | Medic Center Management Platform",
+    default: "Doza Medic - Your Personal Medic Assistant",
     template: "%s | Doza Medic",
   },
   description:

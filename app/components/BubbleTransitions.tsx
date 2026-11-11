@@ -1,15 +1,21 @@
+// app/login/components/BubbleTransition.tsx
 "use client";
 
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 
 interface Props {
-  role?: string | null;
+  /**
+   * "closing" — panels slide IN from offscreen (cover the screen)
+   * "opening" — panels slide OUT to offscreen (reveal what's behind)
+   */
   phase: "closing" | "opening";
+  /** Animation duration in seconds. Default 1.2s */
+  duration?: number;
+  /** Fires when the slide animation finishes */
   onAnimationComplete?: () => void;
 }
 
-// Bubble component with deterministic client‑side generation
 const Bubble = ({
   left,
   size,
@@ -36,39 +42,42 @@ const Bubble = ({
 
 export default function BubbleTransition({
   phase,
+  duration = 1.2,
   onAnimationComplete,
 }: Props) {
-  // State to hold bubble data – generated only on client to avoid hydration mismatch
   const [bubbles, setBubbles] = useState<
     { left: number; size: number; delay: number }[]
   >([]);
 
   useEffect(() => {
-    // Generate 60 random bubbles with deterministic values
     const generated = Array.from({ length: 60 }, (_, i) => ({
-      left: 2 + Math.random() * 96, // 2% to 98%
-      size: 1 + Math.random() * 3, // 1px to 4px
+      left: 2 + Math.random() * 96,
+      size: 1 + Math.random() * 3,
       delay: i * 0.03,
     }));
     setBubbles(generated);
-  }, []); // runs once on client
+  }, []);
 
-  // Determine target x position based on phase
-  const leftTarget = phase === "closing" ? 0 : "-100%";
-  const rightTarget = phase === "closing" ? 0 : "100%";
+  // ── FIXED: closing vs opening both animate correctly ──
+  // "closing" → panels come from offscreen to center
+  // "opening" → panels go from center to offscreen
+  const leftInitial = phase === "closing" ? "-100%" : "0%";
+  const leftAnimate = phase === "closing" ? "0%" : "-100%";
+  const rightInitial = phase === "closing" ? "100%" : "0%";
+  const rightAnimate = phase === "closing" ? "0%" : "100%";
 
   return (
     <motion.div
       className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden"
       initial={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.5 }} // Exit fade duration (0.5s)
+      transition={{ duration: 0.35 }}
     >
-      {/* Left panel (green) */}
+      {/* Left panel (green) — DO */}
       <motion.div
-        initial={{ x: "-100%" }}
-        animate={{ x: leftTarget }}
-        transition={{ duration: 3, ease: [0.16, 1, 0.3, 1] }} // 3 seconds
+        initial={{ x: leftInitial }}
+        animate={{ x: leftAnimate }}
+        transition={{ duration, ease: [0.16, 1, 0.3, 1] }}
         onAnimationComplete={onAnimationComplete}
         className="w-1/2 h-full bg-[#2AB04A] bg-[radial-gradient(circle_at_top_right,_#44C864,_#2AB04A)] flex items-center justify-end"
       >
@@ -82,11 +91,11 @@ export default function BubbleTransition({
         </div>
       </motion.div>
 
-      {/* Right panel (blue) */}
+      {/* Right panel (blue) — ZA */}
       <motion.div
-        initial={{ x: "100%" }}
-        animate={{ x: rightTarget }}
-        transition={{ duration: 3, ease: [0.16, 1, 0.3, 1] }} // 3 seconds
+        initial={{ x: rightInitial }}
+        animate={{ x: rightAnimate }}
+        transition={{ duration, ease: [0.16, 1, 0.3, 1] }}
         className="w-1/2 h-full bg-[#2E98ED] bg-[radial-gradient(circle_at_top_left,_#4AA9F2,_#2E98ED)] flex items-center justify-start"
       >
         <div className="relative h-20 w-[160px] bg-[#1e66a0] rounded-r-full overflow-hidden flex items-center justify-start pl-6">
@@ -99,7 +108,7 @@ export default function BubbleTransition({
         </div>
       </motion.div>
 
-      {/* Optional loading text */}
+      {/* Tagline */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}

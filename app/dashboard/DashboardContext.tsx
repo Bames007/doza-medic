@@ -143,7 +143,7 @@ export const MedicProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       await signOut(auth);
     } catch (e) {
-      console.warn("[medic/logout]", e);
+      console.warn("[medic/auth/logout]", e);
     }
     clearLocalSession();
     setMedic(null);

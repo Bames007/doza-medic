@@ -17,7 +17,7 @@ import {
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { ref, get, query, orderByChild, equalTo } from "firebase/database";
+import { ref, get } from "firebase/database";
 import { auth, db } from "@/app/utils/firebaseConfig";
 import { bebasNeue, poppins } from "@/app/utils/constants";
 import LoadingScreen from "../components/LoadingScreen";
@@ -84,7 +84,6 @@ const MedicLoginPage: React.FC = () => {
     !formData.email.trim() ||
     !formData.password.trim();
 
-  // Map Firebase Auth error codes to friendly messages
   const friendlyAuthError = (code?: string): string => {
     switch (code) {
       case "auth/invalid-credential":
@@ -124,6 +123,7 @@ const MedicLoginPage: React.FC = () => {
     try {
       // 1. Firebase Auth
       let uid: string;
+      let idToken: string;
       try {
         const cred = await signInWithEmailAndPassword(
           auth,
@@ -131,13 +131,37 @@ const MedicLoginPage: React.FC = () => {
           formData.password,
         );
         uid = cred.user.uid;
+        idToken = await cred.user.getIdToken();
       } catch (authErr: any) {
         setError(friendlyAuthError(authErr?.code));
         setLoading(false);
         return;
       }
 
-      // 2. Direct read by UID — no query
+      // 2. ⬇ NEW: Mint the __session cookie via the server
+      try {
+        const cookieRes = await fetch("/api/medic/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idToken }),
+          credentials: "include",
+        });
+
+        if (!cookieRes.ok) {
+          const err = await cookieRes.json().catch(() => ({}));
+          await signOut(auth);
+          setError(err.error || "Could not establish session. Try again.");
+          setLoading(false);
+          return;
+        }
+      } catch {
+        await signOut(auth);
+        setError("Could not establish session. Try again.");
+        setLoading(false);
+        return;
+      }
+
+      // 3. Load the medic profile
       const snap = await get(ref(db, `doza_medics/${uid}`));
       if (!snap.exists()) {
         await signOut(auth);
@@ -188,11 +212,7 @@ const MedicLoginPage: React.FC = () => {
         expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       });
 
-      if (!medic.profileComplete) {
-        router.push("/dashboard");
-      } else {
-        router.push("/dashboard");
-      }
+      router.push("/dashboard");
     } catch (err: any) {
       console.error("[/login]", err);
       setError("Login failed. Please try again.");
