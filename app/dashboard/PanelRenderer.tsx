@@ -17,24 +17,12 @@ import PatientsPanel from "./panels/PatientsPanel";
 import ReviewsPanel from "./panels/ReviewsPanel";
 import ServicesPanel from "./panels/ServicesPanel";
 import AvailabilityPanel from "./panels/AvailabilityPanel";
-
-// import AppointmentsPanel from "./AppointmentsPanel";
-// import MessagesPanel from "./MessagesPanel";
-// import NotificationsPanel from "./NotificationsPanel";
-// import VideoQueuePanel from "./VideoQueuePanel";
-// import HomeQueuePanel from "./HomeQueuePanel";
-// import ClinicQueuePanel from "./ClinicQueuePanel";
-// import PatientsPanel from "./PatientsPanel";
-// import MedicalRecordsPanel from "./MedicalRecordsPanel";
-// import LabResultsPanel from "./LabResultsPanel";
-// import ReferralsPanel from "./ReferralsPanel";
-// import PrescriptionsPanel from "./PrescriptionsPanel";
-// import AvailabilityPanel from "./AvailabilityPanel";
-// import ServicesPanel from "./ServicesPanel";
-// import EarningsPanel from "./EarningsPanel";
-// import ReviewsPanel from "./ReviewsPanel";
-// import SettingsPanel from "./SettingsPanel";
-// import HelpPanel from "./HelpPanel";
+import MessagesPanel from "./panels/MessagesPanel";
+import {
+  ClinicQueuePanel,
+  HomeQueuePanel,
+  OnlineQueuePanel,
+} from "./panels/QueuePanel";
 
 // ─── Fallback for missing panels ────────────────────────────────
 const NotFoundPanel = ({ panel }: { panel: string }) => (
@@ -78,12 +66,10 @@ export default function PanelRenderer() {
         return <DashboardPanel />;
 
       case "appointments":
-        // return <AppointmentsPanel />;
         return <AppointmentsPanel />;
 
       case "messages":
-        // return <MessagesPanel />;
-        return <NotFoundPanel panel="messages" />;
+        return <MessagesPanel />;
 
       case "notifications":
         // return <NotificationsPanel />;
@@ -92,15 +78,15 @@ export default function PanelRenderer() {
       // ─── Consultation queues (shown conditionally by nav) ────
       case "video-queue":
         // return <VideoQueuePanel />;
-        return <NotFoundPanel panel="video-queue" />;
+        return <OnlineQueuePanel />;
 
       case "home-queue":
         // return <HomeQueuePanel />;
-        return <NotFoundPanel panel="home-queue" />;
+        return <HomeQueuePanel />;
 
       case "clinic-queue":
         // return <ClinicQueuePanel />;
-        return <NotFoundPanel panel="clinic-queue" />;
+        return <ClinicQueuePanel />;
 
       // ─── Clinical ────────────────────────────────────────────
       case "patients":
@@ -111,7 +97,7 @@ export default function PanelRenderer() {
         // return <MedicalRecordsPanel />;
         return <NotFoundPanel panel="records" />;
 
-      case "lab-results":
+        // case "lab-results":
         // return <LabResultsPanel />;
         return <NotFoundPanel panel="lab-results" />;
 
@@ -148,13 +134,13 @@ export default function PanelRenderer() {
       case "verification":
         return <VerificationPanel />;
 
-      case "settings":
-        // return <SettingsPanel />;
-        return <NotFoundPanel panel="settings" />;
+      // case "settings":
+      //   // return <SettingsPanel />;
+      //   return <NotFoundPanel panel="settings" />;
 
-      case "help":
-        // return <HelpPanel />;
-        return <NotFoundPanel panel="help" />;
+      // case "help":
+      //   // return <HelpPanel />;
+      //   return <NotFoundPanel panel="help" />;
 
       default:
         return <NotFoundPanel panel={activePanel} />;

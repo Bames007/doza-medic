@@ -177,6 +177,11 @@ function fmtFileSize(bytes?: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Trust the server's status field first, then use the clock only to
+ * decide "ending soon". Prevents a skewed device clock from locking
+ * the chat in "waiting" or "ended" when it shouldn't be.
+ */
 function derivePhase(
   meta: ChatMeta | null,
   hasRating: boolean,
@@ -184,11 +189,15 @@ function derivePhase(
 ): ChatPhase {
   if (hasRating) return "rated";
   if (!meta) return "waiting";
-  if (now < meta.scheduledMs) return "waiting";
-  if (now >= meta.endedMs) return "ended";
-  const elapsed = now - meta.scheduledMs;
+
+  if (meta.status === "waiting") return "waiting";
+  if (meta.status === "ended") return "ended";
+
+  // Server says active. Use time only to flag the last 20%.
   const total = meta.endedMs - meta.scheduledMs;
-  return elapsed > total * 0.8 ? "ending" : "active";
+  const elapsed = now - meta.scheduledMs;
+  if (total > 0 && elapsed > total * 0.8) return "ending";
+  return "active";
 }
 
 async function fileToCompressedDataUrl(file: File): Promise<string> {
@@ -258,6 +267,9 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
   const [recordStartAt, setRecordStartAt] = useState<number>(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  // FIX: sync mutex — prevents duplicate sends on rapid taps / repeated Enter
+  const sendingRef = useRef(false);
 
   const bodyScrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -389,9 +401,12 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
   }, []);
 
   // ── Send text ────────────────────────────────────
+  // FIX: use ref mutex so rapid Enter / button taps can't double-send
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    if (!trimmed || sendingRef.current) return;
+
+    sendingRef.current = true;
     setSending(true);
     setError(null);
     try {
@@ -409,33 +424,44 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     } catch {
       setError("Network error. Try again.");
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
-  }, [text, sending, appointmentId, mutate]);
+  }, [text, appointmentId, mutate]);
 
+  // FIX: ignore Enter while composing (CJK IME, autocorrect) and key auto-repeat
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      if (!e.repeat) handleSend();
     }
   };
 
-  // ── Clinical pads send helpers ───────────────────
+  // ── Clinical pads send helper ────────────────────
+  // FIX: shared mutex prevents double-send from any pad
   const postClinical = async (payload: Record<string, any>) => {
-    const result = await authPost(
-      `/api/appointments/${appointmentId}/messages`,
-      payload,
-    );
-    if (!result?.success) {
-      throw new Error(result?.error || "Could not send");
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    setClinicalSending(true);
+    setError(null);
+    try {
+      const result = await authPost(
+        `/api/appointments/${appointmentId}/messages`,
+        payload,
+      );
+      if (!result?.success) {
+        throw new Error(result?.error || "Could not send");
+      }
+      await mutate();
+      globalMutate("/api/appointments");
+    } finally {
+      sendingRef.current = false;
+      setClinicalSending(false);
     }
-    await mutate();
-    globalMutate("/api/appointments");
   };
 
   const handleSendPrescription = async (data: PrescriptionData) => {
-    setClinicalSending(true);
-    setError(null);
     try {
       await postClinical({
         mediaType: "prescription",
@@ -444,34 +470,24 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
       setShowPrescriptionPad(false);
     } catch (err: any) {
       setError(err?.message || "Could not send prescription");
-    } finally {
-      setClinicalSending(false);
     }
   };
 
   const handleSendTests = async (data: TestsData) => {
-    setClinicalSending(true);
-    setError(null);
     try {
       await postClinical({ mediaType: "tests", testsData: data });
       setShowTestsPad(false);
     } catch (err: any) {
       setError(err?.message || "Could not send tests");
-    } finally {
-      setClinicalSending(false);
     }
   };
 
   const handleSendNotes = async (data: NoteData) => {
-    setClinicalSending(true);
-    setError(null);
     try {
       await postClinical({ mediaType: "note", noteData: data });
       setShowNotesPad(false);
     } catch (err: any) {
       setError(err?.message || "Could not send note");
-    } finally {
-      setClinicalSending(false);
     }
   };
 
@@ -512,6 +528,8 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
       setError(`Image too large (max ${fmtFileSize(IMAGE_MAX_BYTES)})`);
       return;
     }
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     setError(null);
     try {
@@ -529,6 +547,7 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     } catch {
       setError("Could not process image");
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   };
@@ -546,6 +565,8 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
       setError(`PDF too large (max ${fmtFileSize(PDF_MAX_BYTES)})`);
       return;
     }
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     setError(null);
     try {
@@ -568,13 +589,14 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     } catch {
       setError("Could not process document");
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   };
 
   // ── Voice recording ──────────────────────────────
   const startRecording = async () => {
-    if (isRecording) return;
+    if (isRecording || sendingRef.current) return;
     setError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -609,14 +631,16 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
           return;
         }
 
-        const dataUrl = await fileToDataUrl(
-          new File([blob], "voice.webm", {
-            type: mimeType || "audio/webm",
-          }),
-        );
-
+        // FIX: guard against double-send from rapid stop taps
+        if (sendingRef.current) return;
+        sendingRef.current = true;
         setSending(true);
         try {
+          const dataUrl = await fileToDataUrl(
+            new File([blob], "voice.webm", {
+              type: mimeType || "audio/webm",
+            }),
+          );
           const result = await authPost(
             `/api/appointments/${appointmentId}/messages`,
             {
@@ -634,6 +658,7 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
         } catch {
           setError("Network error. Try again.");
         } finally {
+          sendingRef.current = false;
           setSending(false);
         }
       };
@@ -678,6 +703,9 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
       setError("Pick a star rating");
       return;
     }
+    // FIX: prevent double-submit
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setRatingSubmitting(true);
     setError(null);
     try {
@@ -700,6 +728,7 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     } catch {
       setError("Network error. Try again.");
     } finally {
+      sendingRef.current = false;
       setRatingSubmitting(false);
     }
   };
@@ -737,17 +766,14 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
   // ── Render ───────────────────────────────────────
   return (
     <>
-      <style jsx global>{`
+      {/* FIX: plain <style> instead of <style jsx global> — always compiles */}
+      <style>{`
         .chat-scroll {
           scrollbar-width: thin;
           scrollbar-color: rgba(5, 150, 105, 0.25) transparent;
         }
-        .chat-scroll::-webkit-scrollbar {
-          width: 4px;
-        }
-        .chat-scroll::-webkit-scrollbar-track {
-          background: transparent;
-        }
+        .chat-scroll::-webkit-scrollbar { width: 4px; }
+        .chat-scroll::-webkit-scrollbar-track { background: transparent; }
         .chat-scroll::-webkit-scrollbar-thumb {
           background: rgba(5, 150, 105, 0.2);
           border-radius: 9999px;
@@ -763,6 +789,8 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
         exit={{ opacity: 0 }}
         transition={{ duration: 0.18 }}
         className="fixed inset-0 z-[400] bg-slate-950/60 backdrop-blur-sm flex items-stretch sm:items-center justify-center sm:p-4"
+        /* FIX: 100dvh so mobile keyboard/browser chrome can't hide the input bar */
+        style={{ height: "100dvh" }}
       >
         <motion.div
           initial={{ y: "6%", scale: 0.99, opacity: 0 }}
@@ -1216,7 +1244,13 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
           </AnimatePresence>
 
           {/* Input bar */}
-          <div className="shrink-0 border-t border-slate-200 bg-white pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          {/* FIX: inline safe-area padding instead of arbitrary arbitrary class */}
+          <div
+            className="shrink-0 border-t border-slate-200 bg-white"
+            style={{
+              paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))",
+            }}
+          >
             {isRecording ? (
               <div className="px-3 py-3 flex items-center gap-3">
                 <button
@@ -1410,7 +1444,6 @@ function MessageBubble({
     message.mediaType === "tests" ||
     message.mediaType === "note";
 
-  // Clinical messages get no bubble background — the inner card IS the bubble
   return (
     <div className={cn("flex gap-2", isMine ? "justify-end" : "justify-start")}>
       <div

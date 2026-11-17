@@ -70,24 +70,24 @@ export const medicNavigation: MedicNavItem[] = [
   // },
 
   { id: "patients", name: "My Patients", panelId: "patients", icon: Users },
-  {
-    id: "records",
-    name: "Medical Records",
-    panelId: "records",
-    icon: FileText,
-  },
+  // {
+  //   id: "records",
+  //   name: "Medical Records",
+  //   panelId: "records",
+  //   icon: FileText,
+  // },
   // {
   //   id: "lab-results",
   //   name: "Lab Results",
   //   panelId: "lab-results",
   //   icon: Microscope,
   // },
-  {
-    id: "referrals",
-    name: "Referrals",
-    panelId: "referrals",
-    icon: ClipboardList,
-  },
+  // {
+  //   id: "referrals",
+  //   name: "Referrals",
+  //   panelId: "referrals",
+  //   icon: ClipboardList,
+  // },
   {
     id: "prescriptions",
     name: "Prescriptions",
