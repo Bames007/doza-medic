@@ -2,17 +2,27 @@
 "use client";
 
 import { useState } from "react";
-import { MedicProvider } from "./DashboardContext"; // ← the context file with useMedic
+import { MedicProvider, useMedic } from "./DashboardContext";
 import MedicSidebar from "./DashboardSideBar";
 import MedicHeader from "./DashboardHeader";
 import PanelRenderer from "./PanelRenderer";
 import MedicNotificationToast from "./components/MedicNotificationToast";
+import { useBackGuard } from "@/app/utils/useBackGuard";
+import ExitConfirmModal from "@/app/components/ExitConfirmModal";
 
-export default function MedicDashboardLayout() {
+function MedicDashboardInner() {
   const [messagesOpen, setMessagesOpen] = useState(false);
 
+  const { activePanel, navigateToPanel } = useMedic();
+
+  const { showExitConfirm, confirmExit, cancelExit } = useBackGuard({
+    activePanel,
+    rootPanel: "dashboard",
+    onReturnHome: () => navigateToPanel("dashboard"),
+  });
+
   return (
-    <MedicProvider>
+    <>
       <div className="flex min-h-screen bg-slate-50">
         <MedicSidebar onMessagesToggle={() => setMessagesOpen((p) => !p)} />
         <div className="flex-1 min-w-0 flex flex-col">
@@ -22,7 +32,24 @@ export default function MedicDashboardLayout() {
           </main>
         </div>
       </div>
+
       <MedicNotificationToast />
+
+      <ExitConfirmModal
+        open={showExitConfirm}
+        onConfirm={confirmExit}
+        onCancel={cancelExit}
+        title="CLOSE DOZA MEDIC?"
+        body="Are you sure you want to close? Your session stays active — you can come right back."
+      />
+    </>
+  );
+}
+
+export default function MedicDashboardLayout() {
+  return (
+    <MedicProvider>
+      <MedicDashboardInner />
     </MedicProvider>
   );
 }

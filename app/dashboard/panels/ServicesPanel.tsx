@@ -287,7 +287,7 @@ export default function ServicesPanel() {
 
           <div className="space-y-2.5">
             <ConsultTypeRow
-              label="Video call"
+              label="Online Consultation"
               description="Online consultation with chat"
               icon={Video}
               enabled={draft.consultationTypes.online}

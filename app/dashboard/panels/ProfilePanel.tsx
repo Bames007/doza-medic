@@ -218,15 +218,15 @@ export default function UpdateProfile() {
     formData.personalInfo.firstName?.charAt(0) || medic.email?.charAt(0) || "M";
 
   return (
-    <div className={cn("pb-28 lg:pb-8", poppins.className)}>
+    <div className={cn("pb-32 lg:pb-8 overflow-x-hidden", poppins.className)}>
       {/* ════════════════════════════════════════════════════════
           HERO / AVATAR
           ════════════════════════════════════════════════════════ */}
-      <div className="px-4 pt-4 lg:px-8 lg:pt-8">
+      <div className="px-3 sm:px-4 pt-4 lg:px-8 lg:pt-8">
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-600 p-6 lg:p-8 text-white shadow-xl shadow-emerald-500/20"
+          className="relative overflow-hidden rounded-2xl sm:rounded-3xl bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-600 p-4 sm:p-6 lg:p-8 text-white shadow-xl shadow-emerald-500/20"
         >
           <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_1px_1px,white_1px,transparent_0)] bg-[length:24px_24px]" />
           <div className="absolute -right-12 -top-12 w-48 h-48 bg-white/10 rounded-full blur-3xl" />
@@ -307,8 +307,8 @@ export default function UpdateProfile() {
       {/* ════════════════════════════════════════════════════════
           SECTION TABS
           ════════════════════════════════════════════════════════ */}
-      <div className="px-4 lg:px-8 mt-6">
-        <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4 lg:mx-0 lg:px-0 custom-scrollbar">
+      <div className="px-3 sm:px-4 lg:px-8 mt-5">
+        <div className="flex gap-2 overflow-x-auto overscroll-x-contain pb-2 -mx-3 px-3 sm:-mx-4 sm:px-4 lg:mx-0 lg:px-0 custom-scrollbar max-w-full">
           {SECTIONS.map((section) => {
             const Icon = section.icon;
             const active = activeSection === section.id;
@@ -317,7 +317,7 @@ export default function UpdateProfile() {
                 key={section.id}
                 onClick={() => setActiveSection(section.id)}
                 className={cn(
-                  "shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all",
+                  "shrink-0 flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap",
                   active
                     ? "bg-slate-900 text-white shadow-lg"
                     : "bg-white text-slate-600 border border-slate-100 hover:border-emerald-200",
@@ -334,7 +334,7 @@ export default function UpdateProfile() {
       {/* ════════════════════════════════════════════════════════
           FORM
           ════════════════════════════════════════════════════════ */}
-      <div className="px-4 lg:px-8 mt-4 max-w-3xl">
+      <div className="px-3 sm:px-4 lg:px-8 mt-4 max-w-3xl min-w-0">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeSection}
@@ -342,7 +342,7 @@ export default function UpdateProfile() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.18 }}
-            className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 lg:p-8"
+            className="bg-white rounded-2xl sm:rounded-3xl border border-slate-100 shadow-sm p-4 sm:p-6 lg:p-8"
           >
             {activeSection === "personal" && (
               <div className="space-y-5">
@@ -351,7 +351,7 @@ export default function UpdateProfile() {
                   subtitle="How patients and the platform see you"
                 />
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                   <Field label="First name" icon={UserIcon}>
                     <input
                       type="text"
@@ -384,7 +384,7 @@ export default function UpdateProfile() {
                   />
                 </Field>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                   <Field label="Phone" icon={Phone}>
                     <input
                       type="tel"
@@ -451,7 +451,7 @@ export default function UpdateProfile() {
                   />
                 </Field>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                   <Field label="License number" icon={ShieldCheck}>
                     <input
                       type="text"
@@ -496,7 +496,7 @@ export default function UpdateProfile() {
                 {/* Consultation types */}
                 <div>
                   <Label>Consultation methods</Label>
-                  <div className="grid grid-cols-3 gap-3 mt-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3 mt-2">
                     {[
                       { key: "inPerson", label: "In‑Person", icon: UserIcon },
                       { key: "online", label: "Online", icon: Video },
@@ -517,7 +517,7 @@ export default function UpdateProfile() {
                             )
                           }
                           className={cn(
-                            "flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border-2 transition-all",
+                            "flex flex-row sm:flex-col items-center justify-center gap-2 p-3 sm:p-4 rounded-xl sm:rounded-2xl border-2 transition-all min-w-0",
                             active
                               ? "border-emerald-500 bg-emerald-50 text-emerald-700"
                               : "border-slate-200 hover:border-emerald-300 text-slate-500",
@@ -572,7 +572,7 @@ export default function UpdateProfile() {
                             );
                           }}
                           className={cn(
-                            "px-3.5 py-2 rounded-full text-xs font-bold capitalize border-2 transition-all",
+                            "px-3 py-2 rounded-full text-xs font-bold capitalize border-2 transition-all",
                             active
                               ? "bg-emerald-600 text-white border-emerald-600"
                               : "bg-white text-slate-500 border-slate-200 hover:border-emerald-300",
@@ -586,7 +586,7 @@ export default function UpdateProfile() {
                 </div>
 
                 {/* Hours */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                   <Field label="Start time" icon={Clock}>
                     <input
                       type="time"
@@ -683,7 +683,7 @@ export default function UpdateProfile() {
                   />
                 </Field>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
                   <Field label="City" icon={MapPin}>
                     <input
                       type="text"
@@ -742,7 +742,7 @@ export default function UpdateProfile() {
           </div>
         )}
 
-        <div className="mt-4 mb-8 flex items-center justify-end gap-3">
+        <div className="mt-4 mb-8 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-3">
           {saved && (
             <motion.span
               initial={{ opacity: 0, x: -8 }}
@@ -756,7 +756,7 @@ export default function UpdateProfile() {
             onClick={handleSave}
             disabled={saving}
             className={cn(
-              "px-6 py-3 rounded-2xl font-black uppercase tracking-wider text-xs flex items-center gap-2 transition-all shadow-lg",
+              "w-full sm:w-auto justify-center px-6 py-3 rounded-2xl font-black uppercase tracking-wider text-xs flex items-center gap-2 transition-all shadow-lg",
               saving
                 ? "bg-slate-200 text-slate-400 cursor-wait"
                 : "bg-emerald-600 hover:bg-emerald-700 text-white hover:shadow-emerald-500/20",
@@ -872,7 +872,12 @@ function TagInput({
   const commit = () => {
     const trimmed = input.trim();
     if (!trimmed) return;
-    onAdd(trimmed);
+
+    // Avoid duplicates (including casing differences) and only clear after adding.
+    const alreadyAdded = values.some(
+      (value) => value.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (!alreadyAdded) onAdd(trimmed);
     setInput("");
   };
 
@@ -886,7 +891,7 @@ function TagInput({
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs font-bold"
+              className="inline-flex max-w-full items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs font-bold break-words"
             >
               {v}
               <button
@@ -906,32 +911,37 @@ function TagInput({
         )}
       </div>
 
-      <div className="relative">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              commit();
-            }
-          }}
-          placeholder={placeholder}
-          className="w-full px-4 py-3 pr-12 rounded-xl border border-slate-200 outline-none text-sm focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all"
-        />
-        <button
-          type="button"
-          onClick={commit}
-          disabled={!input.trim()}
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg bg-slate-900 text-white disabled:bg-slate-200 transition-colors"
-        >
-          <Plus size={14} />
-        </button>
+      <div className="relative min-w-0">
+        <div className="flex items-stretch gap-2 min-w-0">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                // Prevent Enter from submitting any surrounding form before the tag is added.
+                e.preventDefault();
+                e.stopPropagation();
+                commit();
+              }
+            }}
+            placeholder={placeholder}
+            className="min-w-0 flex-1 w-full px-3 sm:px-4 py-3 rounded-xl border border-slate-200 outline-none text-sm focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all"
+          />
+          <button
+            type="button"
+            onClick={commit}
+            disabled={!input.trim()}
+            aria-label={`Add ${placeholder.toLowerCase()}`}
+            className="shrink-0 self-stretch px-3 rounded-xl bg-slate-900 text-white disabled:bg-slate-200 disabled:text-slate-400 transition-colors flex items-center justify-center"
+          >
+            <Plus size={16} />
+          </button>
+        </div>
 
         {/* Suggestions dropdown */}
         {filteredSuggestions.length > 0 && (
-          <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl border border-slate-100 shadow-lg z-10 max-h-40 overflow-y-auto">
+          <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl border border-slate-100 shadow-xl z-30 max-h-48 overflow-y-auto overscroll-contain">
             {filteredSuggestions.slice(0, 6).map((s) => (
               <button
                 key={s}

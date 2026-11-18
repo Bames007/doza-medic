@@ -90,7 +90,7 @@ const TYPE_META: Record<
   AppointmentType,
   { label: string; icon: React.ElementType }
 > = {
-  video: { label: "Video", icon: Video },
+  video: { label: "Online", icon: Video },
   "in-person": { label: "In-Person", icon: UserIcon },
   home: { label: "Home Visit", icon: Home },
 };

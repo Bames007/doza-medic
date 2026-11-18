@@ -28,7 +28,7 @@ interface Props {
 
 const TYPES: { id: AppointmentType; label: string; icon: React.ElementType }[] =
   [
-    { id: "video", label: "Video", icon: Video },
+    { id: "video", label: "Online Consultation", icon: Video },
     { id: "in-person", label: "In-Person", icon: UserIcon },
     { id: "home", label: "Home Visit", icon: Home },
   ];

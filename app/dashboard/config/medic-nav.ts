@@ -3,21 +3,14 @@ import {
   LayoutDashboard,
   Calendar,
   Users,
-  Stethoscope,
   Pill,
   FileText,
-  Microscope,
   Clock,
   Wallet,
   Star,
-  MessageSquare,
-  UserCircle,
   ShieldCheck,
-  Settings,
-  Bell,
   Video,
   Home,
-  ClipboardList,
 } from "lucide-react";
 import type { MedicNavItem, ConsultationType } from "../type/type";
 
@@ -49,7 +42,7 @@ export const medicNavigation: MedicNavItem[] = [
 
   {
     id: "video-queue",
-    name: "Video Consults",
+    name: "Online Consults",
     panelId: "video-queue",
     icon: Video,
     consultationTypes: ["online"],

@@ -43,7 +43,7 @@ function QueuePanelBase({ type }: { type: QueueType }) {
       case "online":
         return {
           title: "ONLINE QUEUE",
-          subtitle: "Video and chat sessions for today",
+          subtitle: "Chat sessions for today",
           Icon: Video,
           accent: "bg-blue-600",
           accentSoft: "bg-blue-50",
