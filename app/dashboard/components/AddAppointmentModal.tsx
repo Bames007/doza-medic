@@ -23,7 +23,7 @@ type AppointmentType = "video" | "in-person" | "home";
 interface Props {
   open: boolean;
   onClose: () => void;
-  onSuccess: () => void; // ← renamed from onSave
+  onSuccess: () => void;
 }
 
 const TYPES: { id: AppointmentType; label: string; icon: React.ElementType }[] =

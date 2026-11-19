@@ -4,7 +4,13 @@
 import React from "react";
 import { Pill, FlaskConical, FileText } from "lucide-react";
 import { cn } from "@/app/utils/utils";
-import type { PrescriptionData, TestsData, NoteData } from "./ClinicalPads";
+import type {
+  PrescriptionData,
+  PrescriptionDrug,
+  TestsData,
+  TestItem,
+  NoteData,
+} from "./ClinicalPads";
 
 const CATEGORY_LABEL: Record<NoteData["category"], string> = {
   general: "General",
@@ -13,11 +19,33 @@ const CATEGORY_LABEL: Record<NoteData["category"], string> = {
   advice: "Advice",
 };
 
-const PRIORITY_STYLE: Record<TestsData["tests"][number]["priority"], string> = {
+const PRIORITY_STYLE: Record<TestItem["priority"], string> = {
   routine: "bg-blue-50 text-blue-700 border-blue-200",
   urgent: "bg-amber-50 text-amber-700 border-amber-200",
   stat: "bg-rose-50 text-rose-700 border-rose-200",
 };
+
+const FREQ_LABEL: Record<PrescriptionDrug["frequency"], string> = {
+  once: "Once daily",
+  twice: "Twice daily",
+  thrice: "3× daily",
+  custom: "Custom",
+};
+
+function formatDrugMeta(d: PrescriptionDrug): string {
+  const parts: string[] = [];
+  if (d.frequency) {
+    if (d.frequency === "custom" && d.times?.length) {
+      parts.push(d.times.join(", "));
+    } else {
+      parts.push(FREQ_LABEL[d.frequency]);
+    }
+  }
+  if (d.durationDays && d.durationDays > 0) {
+    parts.push(`${d.durationDays} day${d.durationDays === 1 ? "" : "s"}`);
+  }
+  return parts.join(" · ");
+}
 
 export function PrescriptionBubble({ data }: { data: PrescriptionData }) {
   return (
@@ -29,37 +57,41 @@ export function PrescriptionBubble({ data }: { data: PrescriptionData }) {
         </span>
       </div>
       <div className="p-3 space-y-2 max-h-72 overflow-y-auto">
-        {data.drugs.map((d, i) => (
-          <div
-            key={i}
-            className="bg-white rounded-lg border border-emerald-100 p-2"
-          >
-            <p className="text-sm font-bold text-slate-900 truncate">
-              {d.name}
-            </p>
-            <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-[11px] text-slate-600">
-              {d.dosage && (
-                <span className="font-semibold text-emerald-700">
-                  {d.dosage}
-                </span>
-              )}
-              {d.frequency && <span>· {d.frequency}</span>}
-              {d.duration && <span>· {d.duration}</span>}
-            </div>
-            {d.notes && (
-              <p className="text-[10px] text-slate-500 italic mt-1">
-                {d.notes}
+        {data.drugs.map((d, i) => {
+          const meta = formatDrugMeta(d);
+          return (
+            <div
+              key={i}
+              className="bg-white rounded-lg border border-emerald-100 p-2"
+            >
+              <p className="text-sm font-bold text-slate-900 truncate">
+                {d.name}
               </p>
-            )}
-          </div>
-        ))}
-        {data.instructions && (
+              {(d.dosage || meta) && (
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-[11px] text-slate-600">
+                  {d.dosage && (
+                    <span className="font-semibold text-emerald-700">
+                      {d.dosage}
+                    </span>
+                  )}
+                  {meta && <span>{d.dosage ? `· ${meta}` : meta}</span>}
+                </div>
+              )}
+              {d.instructions && (
+                <p className="text-[10px] text-slate-500 italic mt-1">
+                  {d.instructions}
+                </p>
+              )}
+            </div>
+          );
+        })}
+        {data.generalInstructions && (
           <div className="pt-2 border-t border-emerald-200">
             <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700/70 mb-1">
               Instructions
             </p>
             <p className="text-[11px] text-emerald-900/80 leading-relaxed">
-              {data.instructions}
+              {data.generalInstructions}
             </p>
           </div>
         )}

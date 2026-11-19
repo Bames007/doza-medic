@@ -32,6 +32,9 @@ import {
   ClipboardList,
   FlaskConical,
   FileText,
+  Pencil,
+  RotateCcw,
+  Trash2,
 } from "lucide-react";
 import { authFetcher, authPost } from "@/app/utils/client-auth";
 import { cn } from "@/app/utils/utils";
@@ -51,6 +54,8 @@ import {
   TestsBubble,
   NoteBubble,
 } from "./chat/ClinicalBubble";
+import { playMessageChime } from "@/app/utils/notify";
+import { markChatSeen, setOpenChatId } from "@/app/utils/chat-seen-state";
 
 // ─── Types ─────────────────────────────────────────────
 type ChatMessage = {
@@ -74,6 +79,14 @@ type ChatMessage = {
   testsData?: TestsData | null;
   noteData?: NoteData | null;
   createdAt: number;
+  editedAt?: number | null;
+};
+
+type PendingMessage = {
+  id: string;
+  text: string;
+  createdAt: number;
+  status: "sending" | "failed";
 };
 
 type ChatMeta = {
@@ -107,7 +120,6 @@ interface ChatPanelProps {
   onClose: () => void;
 }
 
-// ─── Constants ─────────────────────────────────────────
 export const CHAT_SESSION_KEY = "doza_chat_session";
 export const CHAT_EVENT = "doza:chat-session-changed";
 
@@ -115,7 +127,6 @@ const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 const PDF_MAX_BYTES = 6 * 1024 * 1024;
 const VOICE_MAX_BYTES = 5 * 1024 * 1024;
 
-// ─── sessionStorage helpers ────────────────────────────
 type ChatSessionSnapshot = {
   appointmentId: string;
   medicName: string;
@@ -143,7 +154,6 @@ function clearChatSession() {
   } catch {}
 }
 
-// ─── Helpers ───────────────────────────────────────────
 function fmtTimer(ms: number): string {
   if (ms <= 0) return "00:00";
   const totalSec = Math.floor(ms / 1000);
@@ -177,11 +187,6 @@ function fmtFileSize(bytes?: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/**
- * Trust the server's status field first, then use the clock only to
- * decide "ending soon". Prevents a skewed device clock from locking
- * the chat in "waiting" or "ended" when it shouldn't be.
- */
 function derivePhase(
   meta: ChatMeta | null,
   hasRating: boolean,
@@ -189,11 +194,8 @@ function derivePhase(
 ): ChatPhase {
   if (hasRating) return "rated";
   if (!meta) return "waiting";
-
   if (meta.status === "waiting") return "waiting";
   if (meta.status === "ended") return "ended";
-
-  // Server says active. Use time only to flag the last 20%.
   const total = meta.endedMs - meta.scheduledMs;
   const elapsed = now - meta.scheduledMs;
   if (total > 0 && elapsed > total * 0.8) return "ending";
@@ -207,14 +209,12 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-
   const img = await new Promise<HTMLImageElement>((resolve, reject) => {
     const i = new Image();
     i.onload = () => resolve(i);
     i.onerror = reject;
     i.src = rawDataUrl;
   });
-
   const MAX_DIM = 1200;
   let { width: w, height: h } = img;
   if (w > MAX_DIM || h > MAX_DIM) {
@@ -222,7 +222,6 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
     w = Math.round(w * ratio);
     h = Math.round(h * ratio);
   }
-
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
@@ -256,8 +255,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
   } | null>(null);
 
   const [showAttachMenu, setShowAttachMenu] = useState(false);
-
-  // ── Clinical pad state ───────────────────────────
   const [showPrescriptionPad, setShowPrescriptionPad] = useState(false);
   const [showTestsPad, setShowTestsPad] = useState(false);
   const [showNotesPad, setShowNotesPad] = useState(false);
@@ -268,8 +265,13 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  // FIX: sync mutex — prevents duplicate sends on rapid taps / repeated Enter
   const sendingRef = useRef(false);
+
+  // ── Optimistic send + edit state ────────────────────
+  const [pendingMessages, setPendingMessages] = useState<PendingMessage[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
+  const [savingEditId, setSavingEditId] = useState<string | null>(null);
 
   const bodyScrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -314,6 +316,28 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
   );
 
   useEffect(() => {
+    setOpenChatId(appointmentId);
+    return () => setOpenChatId(null);
+  }, [appointmentId]);
+
+  const prevPatientMsgCountRef = useRef(0);
+  useEffect(() => {
+    const patientMsgs = messages.filter((m) => m.senderRole !== role).length;
+    if (
+      prevPatientMsgCountRef.current > 0 &&
+      patientMsgs > prevPatientMsgCountRef.current
+    ) {
+      playMessageChime();
+    }
+    prevPatientMsgCountRef.current = patientMsgs;
+
+    if (messages.length) {
+      const last = messages[messages.length - 1];
+      if (last?.createdAt) markChatSeen(appointmentId, last.createdAt);
+    }
+  }, [messages, role, appointmentId]);
+
+  useEffect(() => {
     if (!meta) return;
     writeChatSession({
       appointmentId,
@@ -343,17 +367,38 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     };
   }, [appointmentId, meta?.medicName, meta?.endedMs]);
 
+  // ✅ Initial-scroll fix: always land at the bottom on first open.
+  const hasInitialScrollRef = useRef<string | null>(null);
+
   useEffect(() => {
     const el = bodyScrollRef.current;
     if (!el) return;
+
+    const hasContent = messages.length > 0 || pendingMessages.length > 0;
+    if (!hasContent) return;
+
+    if (hasInitialScrollRef.current !== appointmentId) {
+      hasInitialScrollRef.current = appointmentId;
+      let attempts = 0;
+      const tryScroll = () => {
+        if (!el) return;
+        el.scrollTop = el.scrollHeight;
+        attempts++;
+        if (attempts < 5) setTimeout(tryScroll, 120);
+      };
+      requestAnimationFrame(tryScroll);
+      return;
+    }
+
     const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (isNearBottom) {
+    const justSent = pendingMessages.length > 0;
+    if (isNearBottom || justSent) {
       messagesEndRef.current?.scrollIntoView({
         behavior: "smooth",
         block: "end",
       });
     }
-  }, [messages.length]);
+  }, [messages.length, pendingMessages.length, appointmentId]);
 
   const handleScroll = useCallback(() => {
     const el = bodyScrollRef.current;
@@ -400,36 +445,74 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     };
   }, []);
 
-  // ── Send text ────────────────────────────────────
-  // FIX: use ref mutex so rapid Enter / button taps can't double-send
-  const handleSend = useCallback(async () => {
-    const trimmed = text.trim();
-    if (!trimmed || sendingRef.current) return;
-
-    sendingRef.current = true;
-    setSending(true);
-    setError(null);
-    try {
-      const result = await authPost(
-        `/api/appointments/${appointmentId}/messages`,
-        { text: trimmed },
-      );
-      if (result?.success) {
-        setText("");
-        await mutate();
-        globalMutate("/api/appointments");
-      } else {
-        setError(result?.error || "Could not send message");
+  // ─── Optimistic text send ───────────────────────────
+  const postTextMessage = useCallback(
+    async (tempId: string, body: string) => {
+      try {
+        const result = await authPost(
+          `/api/appointments/${appointmentId}/messages`,
+          { text: body },
+        );
+        if (result?.success) {
+          await mutate();
+          setPendingMessages((prev) => prev.filter((m) => m.id !== tempId));
+          globalMutate("/api/appointments");
+          globalMutate("/api/medic/appointments");
+        } else {
+          setPendingMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempId ? { ...m, status: "failed" as const } : m,
+            ),
+          );
+        }
+      } catch {
+        setPendingMessages((prev) =>
+          prev.map((m) =>
+            m.id === tempId ? { ...m, status: "failed" as const } : m,
+          ),
+        );
       }
-    } catch {
-      setError("Network error. Try again.");
-    } finally {
-      sendingRef.current = false;
-      setSending(false);
-    }
-  }, [text, appointmentId, mutate]);
+    },
+    [appointmentId, mutate],
+  );
 
-  // FIX: ignore Enter while composing (CJK IME, autocorrect) and key auto-repeat
+  const handleSend = useCallback(() => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    const tempId = `opt-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const optimistic: PendingMessage = {
+      id: tempId,
+      text: trimmed,
+      createdAt: Date.now(),
+      status: "sending",
+    };
+    setPendingMessages((prev) => [...prev, optimistic]);
+    setText("");
+    setError(null);
+
+    void postTextMessage(tempId, trimmed);
+  }, [text, postTextMessage]);
+
+  const handleResend = useCallback(
+    (pending: PendingMessage) => {
+      if (pending.status === "sending") return;
+      setPendingMessages((prev) =>
+        prev.map((m) =>
+          m.id === pending.id ? { ...m, status: "sending" as const } : m,
+        ),
+      );
+      void postTextMessage(pending.id, pending.text);
+    },
+    [postTextMessage],
+  );
+
+  const handleDiscard = useCallback((id: string) => {
+    setPendingMessages((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter" && !e.shiftKey) {
@@ -438,8 +521,80 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     }
   };
 
-  // ── Clinical pads send helper ────────────────────
-  // FIX: shared mutex prevents double-send from any pad
+  // ─── Edit existing text message (optimistic) ────────
+  const startEdit = useCallback(
+    (msg: ChatMessage) => {
+      if (msg.senderRole !== role) return;
+      if (msg.mediaType) return;
+      if (!msg.text) return;
+      setEditingId(msg.id);
+      setEditingText(msg.text);
+    },
+    [role],
+  );
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setEditingText("");
+  }, []);
+
+  const saveEdit = useCallback(async () => {
+    if (!editingId) return;
+    const trimmed = editingText.trim();
+    if (!trimmed || !data?.data) return;
+
+    const messageIdToEdit = editingId;
+    const originalData = data.data;
+    const editedAt = Date.now();
+
+    // Build optimistic cache update with the new text + editedAt.
+    const optimistic: { success: boolean; data: ChatData } = {
+      success: true,
+      data: {
+        ...originalData,
+        messages: originalData.messages.map((m) =>
+          m.id === messageIdToEdit ? { ...m, text: trimmed, editedAt } : m,
+        ),
+      },
+    };
+
+    // 1) Update cache synchronously, close the textarea, mark the
+    //    bubble as "saving…" — all batched into one render.
+    void mutate(optimistic, { revalidate: false });
+    setEditingId(null);
+    setEditingText("");
+    setSavingEditId(messageIdToEdit);
+    setError(null);
+
+    // 2) Fire the PATCH in the background.
+    try {
+      const res = await fetch(
+        `/api/appointments/${appointmentId}/messages/${messageIdToEdit}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ text: trimmed }),
+        },
+      );
+      const result = await res.json().catch(() => ({}));
+      if (res.ok && result?.success) {
+        await mutate();
+        globalMutate("/api/appointments");
+        globalMutate("/api/medic/appointments");
+      } else {
+        await mutate(); // roll back
+        setError(result?.error || "Could not save edit");
+      }
+    } catch {
+      await mutate(); // roll back
+      setError("Network error. Try again.");
+    } finally {
+      setSavingEditId(null);
+    }
+  }, [appointmentId, editingId, editingText, data, mutate]);
+
+  // ─── Media send (keeps sendingRef guard) ────────────
   const postClinical = async (payload: Record<string, any>) => {
     if (sendingRef.current) return;
     sendingRef.current = true;
@@ -455,6 +610,7 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
       }
       await mutate();
       globalMutate("/api/appointments");
+      globalMutate("/api/medic/appointments");
     } finally {
       sendingRef.current = false;
       setClinicalSending(false);
@@ -491,7 +647,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     }
   };
 
-  // ── Attach menu ──────────────────────────────────
   const openImagePicker = () => {
     setShowAttachMenu(false);
     setTimeout(() => imageInputRef.current?.click(), 50);
@@ -513,7 +668,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     setShowNotesPad(true);
   };
 
-  // ── Send image ───────────────────────────────────
   const handleImageSelected = async (
     e: React.ChangeEvent<HTMLInputElement>,
   ) => {
@@ -541,6 +695,7 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
       if (result?.success) {
         await mutate();
         globalMutate("/api/appointments");
+        globalMutate("/api/medic/appointments");
       } else {
         setError(result?.error || "Could not send image");
       }
@@ -552,7 +707,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     }
   };
 
-  // ── Send PDF ─────────────────────────────────────
   const handlePdfSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -583,6 +737,7 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
       if (result?.success) {
         await mutate();
         globalMutate("/api/appointments");
+        globalMutate("/api/medic/appointments");
       } else {
         setError(result?.error || "Could not send document");
       }
@@ -594,7 +749,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     }
   };
 
-  // ── Voice recording ──────────────────────────────
   const startRecording = async () => {
     if (isRecording || sendingRef.current) return;
     setError(null);
@@ -631,7 +785,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
           return;
         }
 
-        // FIX: guard against double-send from rapid stop taps
         if (sendingRef.current) return;
         sendingRef.current = true;
         setSending(true);
@@ -652,6 +805,7 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
           if (result?.success) {
             await mutate();
             globalMutate("/api/appointments");
+            globalMutate("/api/medic/appointments");
           } else {
             setError(result?.error || "Could not send voice note");
           }
@@ -693,7 +847,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     }
   };
 
-  // ── Rating (patient-only) ────────────────────────
   const [ratingStars, setRatingStars] = useState(0);
   const [ratingComment, setRatingComment] = useState("");
   const [ratingSubmitting, setRatingSubmitting] = useState(false);
@@ -703,7 +856,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
       setError("Pick a star rating");
       return;
     }
-    // FIX: prevent double-submit
     if (sendingRef.current) return;
     sendingRef.current = true;
     setRatingSubmitting(true);
@@ -717,6 +869,7 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
       if (result?.success) {
         await mutate();
         globalMutate("/api/appointments");
+        globalMutate("/api/medic/appointments");
         globalMutate(
           (key) => typeof key === "string" && key.startsWith("/api/medics"),
         );
@@ -733,7 +886,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
     }
   };
 
-  // ── Derived ──────────────────────────────────────
   const medicName = meta?.medicName || "Your medic";
   const otherName =
     role === "patient" ? medicName : meta?.patientName || "Patient";
@@ -763,10 +915,8 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
   const isPatient = role === "patient";
   const isMedic = role === "medic";
 
-  // ── Render ───────────────────────────────────────
   return (
     <>
-      {/* FIX: plain <style> instead of <style jsx global> — always compiles */}
       <style>{`
         .chat-scroll {
           scrollbar-width: thin;
@@ -789,7 +939,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
         exit={{ opacity: 0 }}
         transition={{ duration: 0.18 }}
         className="fixed inset-0 z-[400] bg-slate-950/60 backdrop-blur-sm flex items-stretch sm:items-center justify-center sm:p-4"
-        /* FIX: 100dvh so mobile keyboard/browser chrome can't hide the input bar */
         style={{ height: "100dvh" }}
       >
         <motion.div
@@ -797,7 +946,7 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
           animate={{ y: 0, scale: 1, opacity: 1 }}
           exit={{ y: "6%", scale: 0.99, opacity: 0 }}
           transition={{ type: "spring", stiffness: 320, damping: 30 }}
-          className="bg-white w-full sm:max-w-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full sm:h-auto sm:max-h-[90vh] border border-slate-200 relative"
+          className="bg-white w-full sm:max-w-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full sm:h-[90vh] sm:max-h-[900px] border border-slate-200 relative"
         >
           {/* Header */}
           <div className="shrink-0 border-b border-slate-100 bg-white">
@@ -893,175 +1042,200 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
             )}
           </div>
 
-          {/* Body */}
-          <div
-            ref={bodyScrollRef}
-            onScroll={handleScroll}
-            className="flex-1 overflow-y-auto overscroll-contain bg-slate-50/40 chat-scroll relative"
-          >
-            {phase === "waiting" && !messages.length && (
-              <div className="h-full flex flex-col items-center justify-center text-center px-6 py-10">
-                <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-4">
-                  <Clock size={26} className="text-emerald-600" />
-                </div>
-                <p className="text-base font-bold text-slate-900">
-                  Session hasn&apos;t started yet
-                </p>
-                <p className="text-sm text-slate-500 mt-1 max-w-xs">
-                  Your appointment with {otherName} starts in{" "}
-                  <span className="font-bold text-emerald-700 tabular-nums">
-                    {timerLabel}
-                  </span>
-                  . You&apos;ll be able to chat once it begins.
-                </p>
-              </div>
-            )}
-
-            {messages.length > 0 && (
-              <div className="px-3 sm:px-4 py-3 space-y-3 sm:space-y-2.5">
-                <div className="flex justify-center mb-2 px-2">
-                  <div className="inline-flex items-start gap-1.5 text-[10px] text-slate-500 bg-white/90 border border-slate-200 rounded-2xl px-3 py-2 max-w-md text-center">
-                    <ShieldCheck
-                      size={11}
-                      className="text-emerald-600 shrink-0 mt-0.5"
-                    />
-                    <span className="leading-snug text-center">
-                      Messages are encrypted in transit &amp; at rest. Only you
-                      and {otherName} can read them.
+          {/* Body — bg2.png backdrop with soft white veil */}
+          <div className="relative flex-1 overflow-hidden">
+            <div
+              className="absolute inset-0 bg-[url('/bg2.png')] bg-cover bg-center bg-no-repeat"
+              aria-hidden
+            />
+            <div className="absolute inset-0 bg-white/70" aria-hidden />
+            <div
+              ref={bodyScrollRef}
+              onScroll={handleScroll}
+              className="relative h-full overflow-y-auto overscroll-contain chat-scroll"
+            >
+              {phase === "waiting" && !messages.length && (
+                <div className="h-full flex flex-col items-center justify-center text-center px-6 py-10">
+                  <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-4">
+                    <Clock size={26} className="text-emerald-600" />
+                  </div>
+                  <p className="text-base font-bold text-slate-900">
+                    Session hasn&apos;t started yet
+                  </p>
+                  <p className="text-sm text-slate-500 mt-1 max-w-xs">
+                    Your appointment with {otherName} starts in{" "}
+                    <span className="font-bold text-emerald-700 tabular-nums">
+                      {timerLabel}
                     </span>
+                    . You&apos;ll be able to chat once it begins.
+                  </p>
+                </div>
+              )}
+
+              {messages.length > 0 && (
+                <div className="px-3 sm:px-4 py-3 space-y-3 sm:space-y-2.5">
+                  <div className="flex justify-center mb-2 px-2">
+                    <div className="inline-flex items-start gap-1.5 text-[10px] text-slate-500 bg-white/90 border border-slate-200 rounded-2xl px-3 py-2 max-w-md text-center">
+                      <ShieldCheck
+                        size={11}
+                        className="text-emerald-600 shrink-0 mt-0.5"
+                      />
+                      <span className="leading-snug text-center">
+                        Messages are encrypted in transit &amp; at rest. Only
+                        you and {otherName} can read them.
+                      </span>
+                    </div>
+                  </div>
+
+                  {messages.map((msg, idx) => {
+                    const isMine = msg.senderRole === role;
+                    const prev = messages[idx - 1];
+                    const showSender =
+                      !isMine && (!prev || prev.senderRole !== msg.senderRole);
+                    const isEditing = editingId === msg.id;
+                    const isSavingEdit = savingEditId === msg.id;
+                    return (
+                      <MessageBubble
+                        key={msg.id}
+                        message={msg}
+                        isMine={isMine}
+                        showSender={showSender}
+                        senderName={otherName}
+                        onImageClick={(url) => setLightboxUrl(url)}
+                        onPdfMaximize={(data) => setPdfLightbox(data)}
+                        isEditing={isEditing}
+                        isSavingEdit={isSavingEdit}
+                        editingText={editingText}
+                        onEditingTextChange={setEditingText}
+                        onStartEdit={startEdit}
+                        onCancelEdit={cancelEdit}
+                        onSaveEdit={saveEdit}
+                      />
+                    );
+                  })}
+
+                  {pendingMessages.map((p) => (
+                    <PendingMessageBubble
+                      key={p.id}
+                      message={p}
+                      onResend={() => handleResend(p)}
+                      onDiscard={() => handleDiscard(p.id)}
+                    />
+                  ))}
+
+                  <div ref={messagesEndRef} />
+                </div>
+              )}
+
+              {phase === "ended" && !myRatingDone && !showRating && (
+                <div className="px-4 py-6 border-t border-slate-100 bg-white text-center">
+                  <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-3">
+                    <ShieldCheck size={22} className="text-slate-500" />
+                  </div>
+                  <p className="text-sm font-bold text-slate-900">
+                    Session ended
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto leading-relaxed">
+                    {isPatient
+                      ? `This chat is now read-only. Rate your experience with ${otherName} to close out the session.`
+                      : "This chat is now read-only. The patient will be able to rate the session from their side."}
+                  </p>
+                  {isPatient && (
+                    <button
+                      type="button"
+                      onClick={() => setShowRating(true)}
+                      className="mt-4 inline-flex items-center gap-1.5 px-6 py-3 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm min-h-11"
+                    >
+                      <Star size={14} /> Rate session
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {showRating && isPatient && (
+                <div className="px-4 py-5 border-t border-slate-100 bg-white">
+                  <div className="text-center mb-4">
+                    <p className="text-sm font-bold text-slate-900">
+                      Rate your session
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      With {otherName}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-center gap-1 mb-4">
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setRatingStars(n)}
+                        aria-label={`${n} star${n > 1 ? "s" : ""}`}
+                        className="min-h-12 min-w-12 inline-flex items-center justify-center rounded-lg hover:bg-slate-50 active:scale-90 transition-all"
+                      >
+                        <Star
+                          size={32}
+                          className={cn(
+                            "fill-current transition-colors",
+                            ratingStars >= n
+                              ? "text-amber-400"
+                              : "text-slate-300",
+                          )}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                  {ratingStars > 0 && (
+                    <p className="text-center text-xs font-bold text-slate-700 mb-3">
+                      {ratingStars}/5
+                    </p>
+                  )}
+                  <textarea
+                    value={ratingComment}
+                    onChange={(e) => setRatingComment(e.target.value)}
+                    rows={2}
+                    placeholder="Optional: share your thoughts"
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15 resize-none"
+                  />
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowRating(false)}
+                      className="flex-1 min-h-12 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold hover:bg-slate-200 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={submitRating}
+                      disabled={ratingStars < 1 || ratingSubmitting}
+                      className="flex-[2] min-h-12 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5"
+                    >
+                      {ratingSubmitting ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Check size={14} />
+                      )}
+                      Submit rating
+                    </button>
                   </div>
                 </div>
+              )}
 
-                {messages.map((msg, idx) => {
-                  const isMine = msg.senderRole === role;
-                  const prev = messages[idx - 1];
-                  const showSender =
-                    !isMine && (!prev || prev.senderRole !== msg.senderRole);
-                  return (
-                    <MessageBubble
-                      key={msg.id}
-                      message={msg}
-                      isMine={isMine}
-                      showSender={showSender}
-                      senderName={otherName}
-                      onImageClick={(url) => setLightboxUrl(url)}
-                      onPdfMaximize={(data) => setPdfLightbox(data)}
-                    />
-                  );
-                })}
-                <div ref={messagesEndRef} />
-              </div>
-            )}
-
-            {phase === "ended" && !myRatingDone && !showRating && (
-              <div className="px-4 py-6 border-t border-slate-100 bg-white text-center">
-                <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-3">
-                  <ShieldCheck size={22} className="text-slate-500" />
-                </div>
-                <p className="text-sm font-bold text-slate-900">
-                  Session ended
-                </p>
-                <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto leading-relaxed">
-                  {isPatient
-                    ? `This chat is now read-only. Rate your experience with ${otherName} to close out the session.`
-                    : "This chat is now read-only. The patient will be able to rate the session from their side."}
-                </p>
-                {isPatient && (
-                  <button
-                    type="button"
-                    onClick={() => setShowRating(true)}
-                    className="mt-4 inline-flex items-center gap-1.5 px-6 py-3 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm min-h-11"
-                  >
-                    <Star size={14} /> Rate session
-                  </button>
-                )}
-              </div>
-            )}
-
-            {showRating && isPatient && (
-              <div className="px-4 py-5 border-t border-slate-100 bg-white">
-                <div className="text-center mb-4">
-                  <p className="text-sm font-bold text-slate-900">
-                    Rate your session
+              {phase === "rated" && isPatient && (
+                <div className="px-4 py-8 border-t border-slate-100 bg-emerald-50 text-center">
+                  <div className="w-14 h-14 rounded-full bg-emerald-600 flex items-center justify-center mx-auto mb-3">
+                    <Check size={24} className="text-white" strokeWidth={3} />
+                  </div>
+                  <p className="text-sm font-bold text-emerald-900">
+                    Thanks for your feedback
                   </p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    With {otherName}
+                  <p className="text-xs text-emerald-800/70 mt-1">
+                    This session is archived in your appointment history.
                   </p>
                 </div>
-                <div className="flex items-center justify-center gap-1 mb-4">
-                  {[1, 2, 3, 4, 5].map((n) => (
-                    <button
-                      key={n}
-                      type="button"
-                      onClick={() => setRatingStars(n)}
-                      aria-label={`${n} star${n > 1 ? "s" : ""}`}
-                      className="min-h-12 min-w-12 inline-flex items-center justify-center rounded-lg hover:bg-slate-50 active:scale-90 transition-all"
-                    >
-                      <Star
-                        size={32}
-                        className={cn(
-                          "fill-current transition-colors",
-                          ratingStars >= n
-                            ? "text-amber-400"
-                            : "text-slate-300",
-                        )}
-                      />
-                    </button>
-                  ))}
-                </div>
-                {ratingStars > 0 && (
-                  <p className="text-center text-xs font-bold text-slate-700 mb-3">
-                    {ratingStars}/5
-                  </p>
-                )}
-                <textarea
-                  value={ratingComment}
-                  onChange={(e) => setRatingComment(e.target.value)}
-                  rows={2}
-                  placeholder="Optional: share your thoughts"
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15 resize-none"
-                />
-                <div className="flex gap-2 mt-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowRating(false)}
-                    className="flex-1 min-h-12 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold hover:bg-slate-200 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={submitRating}
-                    disabled={ratingStars < 1 || ratingSubmitting}
-                    className="flex-[2] min-h-12 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5"
-                  >
-                    {ratingSubmitting ? (
-                      <Loader2 size={14} className="animate-spin" />
-                    ) : (
-                      <Check size={14} />
-                    )}
-                    Submit rating
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {phase === "rated" && isPatient && (
-              <div className="px-4 py-8 border-t border-slate-100 bg-emerald-50 text-center">
-                <div className="w-14 h-14 rounded-full bg-emerald-600 flex items-center justify-center mx-auto mb-3">
-                  <Check size={24} className="text-white" strokeWidth={3} />
-                </div>
-                <p className="text-sm font-bold text-emerald-900">
-                  Thanks for your feedback
-                </p>
-                <p className="text-xs text-emerald-800/70 mt-1">
-                  This session is archived in your appointment history.
-                </p>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
-          {/* Scroll to bottom */}
           <AnimatePresence>
             {isScrolledUp && (
               <motion.button
@@ -1101,7 +1275,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
             )}
           </AnimatePresence>
 
-          {/* Attach menu */}
           <AnimatePresence>
             {showAttachMenu && (
               <motion.div
@@ -1216,7 +1389,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
             )}
           </AnimatePresence>
 
-          {/* Error toast */}
           <AnimatePresence>
             {error && (
               <motion.div
@@ -1243,8 +1415,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
             )}
           </AnimatePresence>
 
-          {/* Input bar */}
-          {/* FIX: inline safe-area padding instead of arbitrary arbitrary class */}
           <div
             className="shrink-0 border-t border-slate-200 bg-white"
             style={{
@@ -1377,7 +1547,6 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
         </AnimatePresence>
       </motion.div>
 
-      {/* ── Clinical pads (rendered on top of chat) ── */}
       <AnimatePresence>
         {showPrescriptionPad && (
           <PrescriptionPad
@@ -1414,6 +1583,56 @@ export default function ChatPanel({ appointmentId, onClose }: ChatPanelProps) {
   );
 }
 
+// ─── Pending (optimistic) message bubble ─────────────
+function PendingMessageBubble({
+  message,
+  onResend,
+  onDiscard,
+}: {
+  message: PendingMessage;
+  onResend: () => void;
+  onDiscard: () => void;
+}) {
+  const isSending = message.status === "sending";
+  return (
+    <div className="flex gap-2 justify-end">
+      <div className="max-w-[86%] sm:max-w-[85%] flex flex-col items-end">
+        <div className="rounded-2xl shadow-sm px-3 py-2 bg-emerald-600 text-white rounded-tr-md opacity-90">
+          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+            {message.text}
+          </p>
+        </div>
+        <div className="mt-0.5 px-1 flex items-center gap-1.5 text-[10px] tabular-nums text-slate-400">
+          <span>{fmtMessageTime(message.createdAt)}</span>
+          {isSending ? (
+            <span className="inline-flex items-center gap-1 text-slate-400">
+              <Loader2 size={10} className="animate-spin" /> sending…
+            </span>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onResend}
+                className="inline-flex items-center gap-1 font-bold text-rose-600 hover:text-rose-700"
+              >
+                <RotateCcw size={10} /> Resend
+              </button>
+              <span className="text-slate-300">·</span>
+              <button
+                type="button"
+                onClick={onDiscard}
+                className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-700"
+              >
+                <Trash2 size={10} /> Discard
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Message bubble ────────────────────────────────────
 function MessageBubble({
   message,
@@ -1422,6 +1641,13 @@ function MessageBubble({
   senderName,
   onImageClick,
   onPdfMaximize,
+  isEditing,
+  isSavingEdit,
+  editingText,
+  onEditingTextChange,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
 }: {
   message: ChatMessage;
   isMine: boolean;
@@ -1433,6 +1659,13 @@ function MessageBubble({
     fileName?: string | null;
     watermarkText: string;
   }) => void;
+  isEditing: boolean;
+  isSavingEdit: boolean;
+  editingText: string;
+  onEditingTextChange: (t: string) => void;
+  onStartEdit: (m: ChatMessage) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: () => void;
 }) {
   const isImageOnly = message.mediaType === "image" && !message.text;
   const watermarkText = `${senderName} · ${new Date(
@@ -1443,6 +1676,9 @@ function MessageBubble({
     message.mediaType === "prescription" ||
     message.mediaType === "tests" ||
     message.mediaType === "note";
+
+  const editable =
+    isMine && !message.mediaType && !!message.text && !isSavingEdit;
 
   return (
     <div className={cn("flex gap-2", isMine ? "justify-end" : "justify-start")}>
@@ -1474,11 +1710,12 @@ function MessageBubble({
         ) : (
           <div
             className={cn(
-              "rounded-2xl shadow-sm",
+              "rounded-2xl shadow-sm transition-opacity",
               isImageOnly ? "p-1" : "px-3 py-2",
               isMine
                 ? "bg-emerald-600 text-white rounded-tr-md"
                 : "bg-white text-slate-900 border border-slate-200 rounded-tl-md",
+              isSavingEdit && "opacity-80",
             )}
           >
             {message.mediaType === "image" && message.mediaUrl && (
@@ -1519,30 +1756,95 @@ function MessageBubble({
                 isMine={isMine}
               />
             )}
-            {message.text && (
-              <p
-                className={cn(
-                  "text-sm leading-relaxed whitespace-pre-wrap break-words",
-                  (message.mediaType === "image" ||
-                    message.mediaType === "pdf") &&
-                    "mt-1.5",
-                )}
-              >
-                {message.text}
-              </p>
+
+            {isEditing ? (
+              <div className="min-w-[220px] w-full">
+                <textarea
+                  value={editingText}
+                  onChange={(e) => onEditingTextChange(e.target.value)}
+                  rows={Math.max(2, Math.ceil(editingText.length / 40))}
+                  autoFocus
+                  className={cn(
+                    "w-full px-2.5 py-2 rounded-lg text-sm resize-none outline-none",
+                    isMine
+                      ? "bg-white/15 text-white placeholder:text-white/60 focus:bg-white/25"
+                      : "bg-slate-50 text-slate-900 border border-slate-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15",
+                  )}
+                  style={{ maxHeight: 160 }}
+                />
+                <div className="flex items-center justify-end gap-1.5 mt-1.5">
+                  <button
+                    type="button"
+                    onClick={onCancelEdit}
+                    className={cn(
+                      "text-[11px] font-bold px-2.5 py-1 rounded-md",
+                      isMine
+                        ? "text-white/80 hover:bg-white/15"
+                        : "text-slate-600 hover:bg-slate-100",
+                    )}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onSaveEdit}
+                    disabled={!editingText.trim()}
+                    className={cn(
+                      "text-[11px] font-bold px-2.5 py-1 rounded-md inline-flex items-center gap-1",
+                      isMine
+                        ? "bg-white text-emerald-700 hover:bg-white/90 disabled:opacity-60"
+                        : "bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60",
+                    )}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : (
+              message.text && (
+                <p
+                  className={cn(
+                    "text-sm leading-relaxed whitespace-pre-wrap break-words",
+                    (message.mediaType === "image" ||
+                      message.mediaType === "pdf") &&
+                      "mt-1.5",
+                  )}
+                >
+                  {message.text}
+                </p>
+              )
             )}
           </div>
         )}
 
-        <p className="text-[9px] font-medium mt-0.5 px-1 tabular-nums text-slate-400">
+        {/* Timestamp row — saving… | · edited | pencil */}
+        <p className="text-[9px] font-medium mt-0.5 px-1 tabular-nums text-slate-400 inline-flex items-center gap-1">
           {fmtMessageTime(message.createdAt)}
+          {isSavingEdit ? (
+            <span className="inline-flex items-center gap-1 font-bold text-slate-500">
+              <Loader2 size={9} className="animate-spin" />
+              sending…
+            </span>
+          ) : message.editedAt ? (
+            <span className="italic">· edited</span>
+          ) : null}
+          {editable && !isEditing && (
+            <button
+              type="button"
+              onClick={() => onStartEdit(message)}
+              aria-label="Edit message"
+              className="ml-0.5 text-slate-400 hover:text-emerald-600 transition-colors"
+            >
+              <Pencil size={10} />
+            </button>
+          )}
         </p>
       </div>
     </div>
   );
 }
 
-// ─── Secure image ─────────────────────────────────────
+// ─── Secure image / Voice player / Image lightbox ────
 function SecureImage({
   url,
   alt,
@@ -1554,7 +1856,6 @@ function SecureImage({
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
-
   useEffect(() => {
     let cancelled = false;
     fetchFile(url)
@@ -1568,8 +1869,7 @@ function SecureImage({
       cancelled = true;
     };
   }, [url]);
-
-  if (error) {
+  if (error)
     return (
       <div
         className={cn(
@@ -1582,9 +1882,7 @@ function SecureImage({
         </span>
       </div>
     );
-  }
-
-  if (!src) {
+  if (!src)
     return (
       <div
         className={cn(
@@ -1593,12 +1891,9 @@ function SecureImage({
         )}
       />
     );
-  }
-
   return <img src={src} alt={alt} loading="lazy" className={className} />;
 }
 
-// ─── Voice player ─────────────────────────────────────
 function VoicePlayer({
   src: url,
   durationMs,
@@ -1612,7 +1907,6 @@ function VoicePlayer({
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-
   useEffect(() => {
     let cancelled = false;
     fetchFile(url)
@@ -1626,17 +1920,12 @@ function VoicePlayer({
       cancelled = true;
     };
   }, [url]);
-
   const toggle = () => {
     const el = audioRef.current;
     if (!el) return;
-    if (playing) {
-      el.pause();
-    } else {
-      el.play().catch(() => {});
-    }
+    if (playing) el.pause();
+    else el.play().catch(() => {});
   };
-
   return (
     <div className="flex items-center gap-2 min-w-[160px]">
       <button
@@ -1694,7 +1983,6 @@ function VoicePlayer({
   );
 }
 
-// ─── Image lightbox ───────────────────────────────────
 function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
   const [scale, setScale] = useState(1);
   const [src, setSrc] = useState<string | null>(null);
@@ -1703,7 +1991,6 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
   const lastTapRef = useRef<number>(0);
   const pinchStartDist = useRef<number>(0);
   const pinchStartScale = useRef<number>(1);
-
   useEffect(() => {
     let cancelled = false;
     fetchFile(url)
@@ -1717,11 +2004,9 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
       cancelled = true;
     };
   }, [url]);
-
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
         const dist = Math.hypot(
@@ -1732,7 +2017,6 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
         pinchStartScale.current = scale;
       }
     };
-
     const handleTouchMove = (e: TouchEvent) => {
       if (e.touches.length === 2 && pinchStartDist.current > 0) {
         const dist = Math.hypot(
@@ -1743,23 +2027,19 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
         setScale(Math.min(Math.max(next, 1), 4));
       }
     };
-
     const handleTouchEnd = () => {
       pinchStartDist.current = 0;
       if (scale < 1.2) setScale(1);
     };
-
     el.addEventListener("touchstart", handleTouchStart, { passive: true });
     el.addEventListener("touchmove", handleTouchMove, { passive: true });
     el.addEventListener("touchend", handleTouchEnd, { passive: true });
-
     return () => {
       el.removeEventListener("touchstart", handleTouchStart);
       el.removeEventListener("touchmove", handleTouchMove);
       el.removeEventListener("touchend", handleTouchEnd);
     };
   }, [scale]);
-
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -1767,15 +2047,11 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
-
   const handleTap = () => {
     const now = Date.now();
-    if (now - lastTapRef.current < 300) {
-      setScale((s) => (s > 1 ? 1 : 2));
-    }
+    if (now - lastTapRef.current < 300) setScale((s) => (s > 1 ? 1 : 2));
     lastTapRef.current = now;
   };
-
   return (
     <motion.div
       ref={containerRef}
@@ -1794,7 +2070,6 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
       >
         <X size={20} />
       </button>
-
       {error ? (
         <div className="flex flex-col items-center justify-center px-6">
           <AlertCircle size={28} className="text-rose-400 mb-2" />
@@ -1831,7 +2106,6 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
           />
         </motion.div>
       )}
-
       <p
         className={cn(
           "absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-10 text-[11px] font-medium text-white/70 transition-opacity duration-200",

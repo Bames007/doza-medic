@@ -4,6 +4,7 @@ import { verifySessionCookie } from "@/app/utils/auth";
 import { adminDb } from "@/app/utils/firebaseAdmin";
 import { z } from "zod";
 import logger from "@/app/utils/logger";
+import { notifyNewChatMessage } from "@/app/utils/webpush";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,14 +94,11 @@ async function resolveAccess(
     return null;
   }
 
-  // ── No meta yet — figure out which side is opening ──
-  // Try patient list first (the common case)
   const patientApt = await findAppointmentForPatient(uid, appointmentId);
   if (patientApt) {
     return { role: "patient", meta: null, apt: patientApt };
   }
 
-  // Then medic list — this is what fixes the medic-first case
   const medicApt = await findAppointmentForMedic(uid, appointmentId);
   if (medicApt) {
     return { role: "medic", meta: null, apt: medicApt };
@@ -125,10 +123,6 @@ async function createMetaFromAppointment(
   if (now >= endedMs) status = "ended";
   else if (now >= scheduledMs) status = "active";
 
-  // ── Determine BOTH IDs based on which side is opening ──
-  // The patient record has { medicId, ... } but no patientId.
-  // The medic record has { patientId, ... } but no medicId.
-  // So we fill the missing side from `uid`.
   let patientId: string | null = null;
   let medicId: string | null = null;
 
@@ -205,8 +199,6 @@ export async function GET(
 
     let meta = access.meta;
 
-    // Meta doesn't exist yet — build it from the appointment record.
-    // Works for BOTH patient-first and medic-first opens now.
     if (!meta) {
       const apt = (access as any).apt;
       if (!apt) {
@@ -271,6 +263,7 @@ export async function GET(
         testsData: m.testsData ?? null,
         noteData: m.noteData ?? null,
         createdAt: m.createdAt,
+        editedAt: m.editedAt ?? null,
       };
     });
 
@@ -315,15 +308,25 @@ const sendMessageSchema = z
           .array(
             z.object({
               name: z.string().min(1).max(120),
-              dosage: z.string().max(80).optional().default(""),
-              frequency: z.string().max(80).optional().default(""),
-              duration: z.string().max(80).optional().default(""),
-              notes: z.string().max(300).optional().default(""),
+              dosage: z.string().min(1).max(80),
+              quantityPerDose: z.number().positive().max(100),
+              totalQuantity: z.number().int().nonnegative().max(10000),
+              durationDays: z.number().int().nonnegative().max(3650),
+              frequency: z.enum(["once", "twice", "thrice", "custom"]),
+              times: z
+                .array(z.string().regex(/^\d{2}:\d{2}$/))
+                .max(10)
+                .default([]),
+              instructions: z.string().max(300).optional().default(""),
             }),
           )
           .min(1)
           .max(20),
-        instructions: z.string().max(1000).optional().default(""),
+        generalInstructions: z.string().max(1000).optional().default(""),
+        // Ignore any client-supplied metadata — server overrides these
+        prescribedBy: z.string().optional(),
+        prescribedAt: z.string().optional(),
+        centerName: z.string().optional(),
       })
       .optional(),
     testsData: z
@@ -492,6 +495,20 @@ export async function POST(
       }
     }
 
+    // ── Server-side stamping for prescriptions ────────────
+    // The medic name and timestamp are overwritten here so a
+    // malicious client cannot forge "prescribedBy".
+    const finalPrescriptionData =
+      mediaType === "prescription" && prescriptionData
+        ? {
+            drugs: prescriptionData.drugs,
+            generalInstructions: prescriptionData.generalInstructions,
+            prescribedBy: meta.medicName,
+            prescribedAt: new Date(now).toISOString(),
+            centerName: meta.medicName,
+          }
+        : prescriptionData || null;
+
     const messageId = `msg-${now}-${Math.random().toString(36).slice(2, 8)}`;
     const message = stripUndefined({
       id: messageId,
@@ -503,10 +520,11 @@ export async function POST(
       mediaDurationMs: mediaDurationMs || null,
       fileName: fileName || null,
       fileSize: fileSize || null,
-      prescriptionData: prescriptionData || null,
+      prescriptionData: finalPrescriptionData,
       testsData: testsData || null,
       noteData: noteData || null,
       createdAt: now,
+      editedAt: null,
     });
 
     await adminDb
@@ -518,6 +536,35 @@ export async function POST(
         .ref(`doza/chats/${appointmentId}/meta/status`)
         .set("active");
     }
+
+    // ── Fire-and-forget push to the other party ──────
+    const preview = text?.trim()
+      ? text.trim().slice(0, 80)
+      : mediaType === "image"
+        ? "📷 Photo"
+        : mediaType === "voice"
+          ? "🎤 Voice note"
+          : mediaType === "pdf"
+            ? "📄 Document"
+            : mediaType === "prescription"
+              ? "💊 Prescription"
+              : mediaType === "tests"
+                ? "🧪 Lab tests"
+                : mediaType === "note"
+                  ? "📝 Clinical note"
+                  : "New message";
+
+    notifyNewChatMessage({
+      appointmentId,
+      meta: {
+        medicId: meta.medicId,
+        patientId: meta.patientId,
+        medicName: meta.medicName,
+        patientName: meta.patientName,
+      },
+      senderRole: access.role,
+      preview,
+    }).catch(() => {});
 
     return NextResponse.json({ success: true, data: message }, { status: 201 });
   } catch (err: any) {

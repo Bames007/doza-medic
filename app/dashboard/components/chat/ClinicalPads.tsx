@@ -1,7 +1,7 @@
 // app/dashboard/components/chat/ClinicalPads.tsx
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { motion } from "framer-motion";
 import {
   X,
@@ -13,6 +13,11 @@ import {
   Plus,
   Trash2,
   AlertCircle,
+  CheckCircle2,
+  Calendar,
+  Infinity as InfinityIcon,
+  Check,
+  Clock,
 } from "lucide-react";
 import { cn } from "@/app/utils/utils";
 
@@ -20,14 +25,21 @@ import { cn } from "@/app/utils/utils";
 export type PrescriptionDrug = {
   name: string;
   dosage: string;
-  frequency: string;
-  duration: string;
-  notes: string;
+  quantityPerDose: number;
+  totalQuantity: number;
+  durationDays: number;
+  frequency: "once" | "twice" | "thrice" | "custom";
+  times: string[];
+  instructions: string;
 };
 
 export type PrescriptionData = {
   drugs: PrescriptionDrug[];
-  instructions: string;
+  generalInstructions: string;
+  // Server-injected — never set by the medic client:
+  prescribedBy?: string;
+  prescribedAt?: string;
+  centerName?: string;
 };
 
 export type TestItem = {
@@ -49,12 +61,15 @@ export type NoteData = {
   category: NoteCategory;
 };
 
-const EMPTY_DRUG: PrescriptionDrug = {
+const EMPTY_PRESCRIPTION_DRUG: PrescriptionDrug = {
   name: "",
   dosage: "",
-  frequency: "",
-  duration: "",
-  notes: "",
+  quantityPerDose: 1,
+  totalQuantity: 0,
+  durationDays: 0,
+  frequency: "once",
+  times: [],
+  instructions: "",
 };
 
 const EMPTY_TEST: TestItem = {
@@ -179,12 +194,17 @@ function PadShell({
   );
 }
 
-// ─── Shared input styles ───────────────────────────────
+// ─── Shared input styles (neutral — used by Tests / Notes) ───
 const inputCls =
   "w-full min-w-0 px-3 py-2 !bg-white dark:!bg-white !text-slate-900 dark:!text-slate-900 border border-slate-200 rounded-lg text-sm placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 disabled:!bg-slate-100 disabled:!text-slate-500 disabled:cursor-not-allowed disabled:opacity-100";
 
+// Emerald variant — matches the patient's Medication form on the user side
+const emeraldInputCls =
+  "w-full min-h-11 px-3.5 py-2 text-sm bg-emerald-50/40 border border-emerald-100 rounded-xl transition-all outline-none placeholder:text-emerald-700/40 text-emerald-900 font-medium focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15 disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed";
+
 // ═════════════════════════════════════════════════════════════════
-// PRESCRIPTION PAD
+// PRESCRIPTION PAD — mirrors the user's MedicationPanel form fields
+// so the patient can save it into their own prescription list.
 // ═════════════════════════════════════════════════════════════════
 export function PrescriptionPad({
   patientName,
@@ -197,21 +217,40 @@ export function PrescriptionPad({
   onSend: (data: PrescriptionData) => Promise<void>;
   sending: boolean;
 }) {
-  const [drugs, setDrugs] = useState<PrescriptionDrug[]>([{ ...EMPTY_DRUG }]);
-  const [instructions, setInstructions] = useState("");
+  const [drugs, setDrugs] = useState<PrescriptionDrug[]>([
+    { ...EMPTY_PRESCRIPTION_DRUG },
+  ]);
+  const [generalInstructions, setGeneralInstructions] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const hasValid = drugs.some((d) => d.name.trim() && d.dosage.trim());
+  const hasValid = drugs.some(
+    (d) => d.name.trim() && d.dosage.trim() && d.quantityPerDose > 0,
+  );
+
+  const updateDrug = (idx: number, patch: Partial<PrescriptionDrug>) => {
+    setDrugs((prev) => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], ...patch };
+      return next;
+    });
+  };
 
   const handleSend = async () => {
     setError(null);
+
     const cleaned = drugs
       .map((d) => ({
         name: d.name.trim(),
         dosage: d.dosage.trim(),
-        frequency: d.frequency.trim(),
-        duration: d.duration.trim(),
-        notes: d.notes.trim(),
+        quantityPerDose: Number(d.quantityPerDose) || 1,
+        totalQuantity: Number(d.totalQuantity) || 0,
+        durationDays: Number(d.durationDays) || 0,
+        frequency: d.frequency,
+        times:
+          d.frequency === "custom"
+            ? d.times.filter((t) => /^\d{2}:\d{2}$/.test(t))
+            : [],
+        instructions: d.instructions.trim(),
       }))
       .filter((d) => d.name && d.dosage);
 
@@ -219,14 +258,14 @@ export function PrescriptionPad({
       setError("Add at least one drug with a name and dosage");
       return;
     }
-    await onSend({ drugs: cleaned, instructions: instructions.trim() });
-  };
+    if (cleaned.some((d) => d.frequency === "custom" && d.times.length === 0)) {
+      setError("Custom-frequency drugs need at least one time (HH:MM)");
+      return;
+    }
 
-  const updateDrug = (idx: number, patch: Partial<PrescriptionDrug>) => {
-    setDrugs((prev) => {
-      const next = [...prev];
-      next[idx] = { ...next[idx], ...patch };
-      return next;
+    await onSend({
+      drugs: cleaned,
+      generalInstructions: generalInstructions.trim(),
     });
   };
 
@@ -270,76 +309,21 @@ export function PrescriptionPad({
       )}
 
       {drugs.map((drug, idx) => (
-        <div
+        <DrugEditor
           key={idx}
-          className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2"
-        >
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">
-              Drug {idx + 1}
-            </p>
-            {drugs.length > 1 && (
-              <button
-                onClick={() =>
-                  setDrugs((prev) => prev.filter((_, i) => i !== idx))
-                }
-                disabled={sending}
-                aria-label="Remove drug"
-                className="text-rose-500 hover:text-rose-700 disabled:opacity-50 inline-flex items-center gap-1 text-[10px] font-bold"
-              >
-                <Trash2 size={11} /> Remove
-              </button>
-            )}
-          </div>
-          <input
-            type="text"
-            value={drug.name}
-            onChange={(e) => updateDrug(idx, { name: e.target.value })}
-            placeholder="Drug name (e.g. Amoxicillin)"
-            disabled={sending}
-            className={inputCls}
-          />
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              type="text"
-              value={drug.dosage}
-              onChange={(e) => updateDrug(idx, { dosage: e.target.value })}
-              placeholder="Dosage (500mg)"
-              disabled={sending}
-              className={inputCls}
-            />
-            <input
-              type="text"
-              value={drug.frequency}
-              onChange={(e) => updateDrug(idx, { frequency: e.target.value })}
-              placeholder="Frequency (2x daily)"
-              disabled={sending}
-              className={inputCls}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              type="text"
-              value={drug.duration}
-              onChange={(e) => updateDrug(idx, { duration: e.target.value })}
-              placeholder="Duration (7 days)"
-              disabled={sending}
-              className={inputCls}
-            />
-            <input
-              type="text"
-              value={drug.notes}
-              onChange={(e) => updateDrug(idx, { notes: e.target.value })}
-              placeholder="Notes (optional)"
-              disabled={sending}
-              className={inputCls}
-            />
-          </div>
-        </div>
+          index={idx}
+          drug={drug}
+          disabled={sending}
+          canRemove={drugs.length > 1}
+          onChange={(patch) => updateDrug(idx, patch)}
+          onRemove={() => setDrugs((prev) => prev.filter((_, i) => i !== idx))}
+        />
       ))}
 
       <button
-        onClick={() => setDrugs((prev) => [...prev, { ...EMPTY_DRUG }])}
+        onClick={() =>
+          setDrugs((prev) => [...prev, { ...EMPTY_PRESCRIPTION_DRUG }])
+        }
         disabled={sending}
         className="w-full py-2.5 rounded-xl border-2 border-dashed border-emerald-300 text-emerald-700 text-xs font-bold hover:bg-emerald-50 disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
       >
@@ -347,19 +331,268 @@ export function PrescriptionPad({
       </button>
 
       <div>
-        <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1.5">
+        <label className="block text-[10px] font-black uppercase tracking-wider text-emerald-700/70 mb-1.5">
           General Instructions (optional)
         </label>
         <textarea
-          value={instructions}
-          onChange={(e) => setInstructions(e.target.value)}
+          value={generalInstructions}
+          onChange={(e) => setGeneralInstructions(e.target.value)}
           rows={2}
           placeholder="e.g. Take after meals, complete the full course"
           disabled={sending}
-          className={cn(inputCls, "resize-none")}
+          className={cn(emeraldInputCls, "resize-none min-h-[70px]")}
         />
       </div>
     </PadShell>
+  );
+}
+
+// ─── Per-drug editor ────────────────────────────────────
+function DrugEditor({
+  index,
+  drug,
+  disabled,
+  canRemove,
+  onChange,
+  onRemove,
+}: {
+  index: number;
+  drug: PrescriptionDrug;
+  disabled: boolean;
+  canRemove: boolean;
+  onChange: (patch: Partial<PrescriptionDrug>) => void;
+  onRemove: () => void;
+}) {
+  const [timesText, setTimesText] = useState(drug.times.join(", "));
+
+  const timesCount =
+    drug.frequency === "custom"
+      ? timesText.split(",").filter((t) => /^\d{2}:\d{2}$/.test(t.trim()))
+          .length
+      : undefined;
+
+  const intakesPerDay =
+    drug.frequency === "custom"
+      ? Math.max(timesCount ?? 0, 1)
+      : drug.frequency === "once"
+        ? 1
+        : drug.frequency === "twice"
+          ? 2
+          : 3;
+
+  const preview = useMemo(() => {
+    const qpd = drug.quantityPerDose || 1;
+    const total = drug.totalQuantity || 0;
+    const days = drug.durationDays || 0;
+
+    if (total > 0 && days > 0) {
+      const durFromQty = Math.ceil(total / (qpd * intakesPerDay));
+      if (Math.abs(durFromQty - days) > 1) {
+        return {
+          icon: AlertCircle,
+          tone: "warn" as const,
+          text: `${total} unit${total === 1 ? "" : "s"} at ${intakesPerDay}×/day ≈ ${durFromQty} days, not ${days}.`,
+        };
+      }
+      return {
+        icon: CheckCircle2,
+        tone: "ok" as const,
+        text: `${total} unit${total === 1 ? "" : "s"} over ${days} day${days === 1 ? "" : "s"} (${intakesPerDay}× daily).`,
+      };
+    }
+    if (total > 0) {
+      const d = Math.ceil(total / (qpd * intakesPerDay));
+      return {
+        icon: Pill,
+        tone: "ok" as const,
+        text: `${total} unit${total === 1 ? "" : "s"} ≈ ${d} day${d === 1 ? "" : "s"} at ${intakesPerDay}×/day.`,
+      };
+    }
+    if (days > 0) {
+      const t = days * qpd * intakesPerDay;
+      return {
+        icon: Calendar,
+        tone: "ok" as const,
+        text: `${days} day${days === 1 ? "" : "s"} ≈ ${t} unit${t === 1 ? "" : "s"} (${intakesPerDay}×/day).`,
+      };
+    }
+    return {
+      icon: InfinityIcon,
+      tone: "info" as const,
+      text: "Ongoing — until stopped.",
+    };
+  }, [
+    drug.quantityPerDose,
+    drug.totalQuantity,
+    drug.durationDays,
+    intakesPerDay,
+  ]);
+
+  const PreviewIcon = preview.icon;
+
+  return (
+    <div className="bg-emerald-50/40 border border-emerald-100 rounded-xl p-3 space-y-2.5">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] font-black uppercase tracking-wider text-emerald-700/70">
+          Drug {index + 1}
+        </p>
+        {canRemove && (
+          <button
+            onClick={onRemove}
+            disabled={disabled}
+            className="text-rose-500 hover:text-rose-700 disabled:opacity-50 inline-flex items-center gap-1 text-[10px] font-bold"
+          >
+            <Trash2 size={11} /> Remove
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          type="text"
+          value={drug.name}
+          onChange={(e) => onChange({ name: e.target.value })}
+          placeholder="Drug name (Amoxicillin)"
+          disabled={disabled}
+          className={emeraldInputCls}
+        />
+        <input
+          type="text"
+          value={drug.dosage}
+          onChange={(e) => onChange({ dosage: e.target.value })}
+          placeholder="Dosage (500mg)"
+          disabled={disabled}
+          className={emeraldInputCls}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="block text-[10px] font-bold text-emerald-700/70 mb-1">
+            Quantity per dose
+          </label>
+          <input
+            type="number"
+            min={1}
+            value={drug.quantityPerDose || ""}
+            onChange={(e) =>
+              onChange({ quantityPerDose: Number(e.target.value) || 1 })
+            }
+            disabled={disabled}
+            className={emeraldInputCls}
+          />
+        </div>
+        <div>
+          <label className="block text-[10px] font-bold text-emerald-700/70 mb-1">
+            Total to dispense
+          </label>
+          <input
+            type="number"
+            min={0}
+            value={drug.totalQuantity || ""}
+            onChange={(e) =>
+              onChange({ totalQuantity: Number(e.target.value) || 0 })
+            }
+            placeholder="e.g. 21"
+            disabled={disabled}
+            className={emeraldInputCls}
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-bold text-emerald-700/70 mb-1">
+          Duration (days)
+        </label>
+        <input
+          type="number"
+          min={0}
+          value={drug.durationDays || ""}
+          onChange={(e) =>
+            onChange({ durationDays: Number(e.target.value) || 0 })
+          }
+          placeholder="e.g. 7"
+          disabled={disabled}
+          className={emeraldInputCls}
+        />
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-bold text-emerald-700/70 mb-1">
+          Frequency
+        </label>
+        <div className="grid grid-cols-4 gap-1.5">
+          {(["once", "twice", "thrice", "custom"] as const).map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => onChange({ frequency: f })}
+              disabled={disabled}
+              className={cn(
+                "min-h-10 rounded-lg text-[11px] font-bold capitalize transition-colors disabled:opacity-50",
+                drug.frequency === f
+                  ? "bg-emerald-600 text-white shadow-sm shadow-emerald-600/20"
+                  : "bg-white border border-emerald-100 text-emerald-700 hover:bg-emerald-50",
+              )}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {drug.frequency === "custom" && (
+        <div>
+          <label className="block text-[10px] font-bold text-emerald-700/70 mb-1">
+            Times (HH:MM, comma separated)
+          </label>
+          <input
+            type="text"
+            value={timesText}
+            onChange={(e) => {
+              setTimesText(e.target.value);
+              const parsed = e.target.value
+                .split(",")
+                .map((t) => t.trim())
+                .filter((t) => /^\d{2}:\d{2}$/.test(t));
+              onChange({ times: parsed });
+            }}
+            placeholder="08:00, 14:00, 20:00"
+            disabled={disabled}
+            className={emeraldInputCls}
+          />
+        </div>
+      )}
+
+      <div>
+        <label className="block text-[10px] font-bold text-emerald-700/70 mb-1">
+          Per-drug notes (optional)
+        </label>
+        <input
+          type="text"
+          value={drug.instructions}
+          onChange={(e) => onChange({ instructions: e.target.value })}
+          placeholder="e.g. Take with water"
+          disabled={disabled}
+          className={emeraldInputCls}
+        />
+      </div>
+
+      <div
+        className={cn(
+          "flex items-start gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-medium border",
+          preview.tone === "warn" &&
+            "bg-amber-50 text-amber-800 border-amber-200",
+          preview.tone === "ok" &&
+            "bg-emerald-50 text-emerald-800 border-emerald-200",
+          preview.tone === "info" &&
+            "bg-slate-50 text-slate-600 border-slate-200",
+        )}
+      >
+        <PreviewIcon size={12} className="shrink-0 mt-0.5" />
+        <span>{preview.text}</span>
+      </div>
+    </div>
   );
 }
 
@@ -542,13 +775,13 @@ export function TestsPad({
 }
 
 // ═════════════════════════════════════════════════════════════════
-// NOTE PAD
+// NOTES PAD
 // ═════════════════════════════════════════════════════════════════
 const NOTE_CATEGORIES: { value: NoteCategory; label: string }[] = [
   { value: "general", label: "General" },
   { value: "diagnosis", label: "Diagnosis" },
   { value: "follow-up", label: "Follow-up" },
-  { value: "advice", label: "Lifestyle / Advice" },
+  { value: "advice", label: "Advice" },
 ];
 
 export function NotesPad({
@@ -567,12 +800,16 @@ export function NotesPad({
   const [category, setCategory] = useState<NoteCategory>("general");
   const [error, setError] = useState<string | null>(null);
 
-  const hasValid = title.trim() && body.trim();
+  const hasValid = title.trim().length > 0 && body.trim().length > 0;
 
   const handleSend = async () => {
     setError(null);
-    if (!title.trim() || !body.trim()) {
-      setError("Title and body are required");
+    if (!title.trim()) {
+      setError("Add a title");
+      return;
+    }
+    if (!body.trim()) {
+      setError("Add the note body");
       return;
     }
     await onSend({
@@ -623,6 +860,20 @@ export function NotesPad({
 
       <div>
         <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1.5">
+          Title
+        </label>
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="e.g. Diagnosis summary"
+          disabled={sending}
+          className={inputCls}
+        />
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1.5">
           Category
         </label>
         <div className="grid grid-cols-2 gap-1.5">
@@ -636,7 +887,7 @@ export function NotesPad({
                 "py-2 rounded-lg text-[11px] font-bold transition-colors disabled:opacity-50",
                 category === c.value
                   ? "bg-amber-600 text-white"
-                  : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50",
+                  : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-100",
               )}
             >
               {c.label}
@@ -647,29 +898,15 @@ export function NotesPad({
 
       <div>
         <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1.5">
-          Title
-        </label>
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="e.g. Follow-up in 2 weeks"
-          disabled={sending}
-          className={inputCls}
-        />
-      </div>
-
-      <div>
-        <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1.5">
           Note
         </label>
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           rows={6}
-          placeholder="Clinical observations, diagnosis, advice, follow-up instructions…"
+          placeholder="Write the clinical note…"
           disabled={sending}
-          className={cn(inputCls, "resize-none")}
+          className={cn(inputCls, "resize-none min-h-[140px]")}
         />
       </div>
     </PadShell>

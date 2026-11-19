@@ -5,6 +5,9 @@ import { adminDb } from "@/app/utils/firebaseAdmin";
 import { z } from "zod";
 import logger from "@/app/utils/logger";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const MEDICS_NODE = "doza_medics";
 
 const createSchema = z.object({
@@ -18,7 +21,6 @@ const createSchema = z.object({
   location: z.string().optional(),
 });
 
-// ─── Helpers ─────────────────────────────────────────
 function parseDurationToMs(label: string | null | undefined): number {
   if (!label) return 60 * 60 * 1000;
   const m = label.toLowerCase().match(/(\d+(?:\.\d+)?)/);
@@ -45,67 +47,133 @@ function deriveUiStatus(
   return "completed";
 }
 
-async function hasChatMessages(aptId: string): Promise<boolean> {
+// ─── Chat info: meta (patientId) + last message ──────
+type LastMessageInfo = {
+  at: number;
+  senderRole: "patient" | "medic";
+  preview: string;
+} | null;
+
+function buildLastMessageInfo(msg: any): LastMessageInfo {
+  if (!msg?.createdAt) return null;
+  const preview = msg.text?.trim()
+    ? msg.text.trim().slice(0, 80)
+    : msg.mediaType === "image"
+      ? "📷 Photo"
+      : msg.mediaType === "voice"
+        ? "🎤 Voice note"
+        : msg.mediaType === "pdf"
+          ? "📄 Document"
+          : msg.mediaType === "prescription"
+            ? "💊 Prescription"
+            : msg.mediaType === "tests"
+              ? "🧪 Lab tests"
+              : msg.mediaType === "note"
+                ? "📝 Clinical note"
+                : "New message";
+
+  return {
+    at: msg.createdAt,
+    senderRole: msg.senderRole === "medic" ? "medic" : "patient",
+    preview,
+  };
+}
+
+async function getChatInfo(aptId: string): Promise<{
+  patientId: string | null;
+  lastMessage: LastMessageInfo;
+}> {
   try {
-    const snap = await adminDb
-      .ref(`doza/chats/${aptId}/messages`)
-      .limitToFirst(1)
-      .once("value");
-    return snap.exists();
+    const [metaSnap, msgSnap] = await Promise.all([
+      adminDb.ref(`doza/chats/${aptId}/meta`).once("value"),
+      adminDb
+        .ref(`doza/chats/${aptId}/messages`)
+        .orderByKey()
+        .limitToLast(1)
+        .once("value"),
+    ]);
+
+    const meta = metaSnap.val();
+    const msgVal = msgSnap.val();
+    const msg = msgVal ? (Object.values(msgVal)[0] as any) : null;
+
+    return {
+      patientId: meta?.patientId || null,
+      lastMessage: buildLastMessageInfo(msg),
+    };
   } catch {
-    return false;
+    return { patientId: null, lastMessage: null };
   }
 }
 
-/** Map a raw stored appointment into the UI shape the panel expects. */
-function toUiAppointment(raw: any, now: number, hasMessages: boolean) {
+/** Pick the first available patient id from any known field name. */
+function resolvePatientId(
+  raw: any,
+  chatPatientId: string | null,
+): string | null {
+  if (!raw) return chatPatientId;
+  const candidates = [
+    raw.patientId,
+    raw.patientUserId,
+    raw.userId,
+    raw.customerId,
+    raw.clientId,
+    raw.bookedById,
+    raw.accountId,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  return chatPatientId;
+}
+
+function toUiAppointment(
+  raw: any,
+  now: number,
+  lastMsg: LastMessageInfo,
+  patientId: string | null,
+) {
   const startMs = raw.scheduledAt
     ? new Date(raw.scheduledAt).getTime()
-    : new Date(`${raw.date}T${raw.time}`).getTime();
-  const durationMins =
-    raw.durationMinutes ?? Math.round(parseDurationToMs(raw.duration) / 60_000);
-  const endMs = computeEndMs(startMs, raw.duration, durationMins);
+    : raw.date && raw.time
+      ? new Date(`${raw.date}T${raw.time}`).getTime()
+      : now;
 
-  const type: "video" | "in-person" | "home" =
-    raw.type === "video" || raw.type === "home"
-      ? raw.type
-      : raw.consultType === "online"
-        ? "video"
-        : raw.address
-          ? "home"
-          : "in-person";
+  const endMs = computeEndMs(startMs, raw.duration, raw.durationMinutes);
+
+  const storedStatus = raw.status || "upcoming";
+  const uiStatus = deriveUiStatus(storedStatus, startMs, endMs, now);
 
   return {
     id: raw.id,
-    patientId: raw.patientId ?? null,
-    patientName: raw.patientName || "Patient",
+    patientId: patientId ?? null,
+    patientName: raw.patientName ?? "Patient",
     patientAge: raw.patientAge ?? null,
     patientProfileImage: raw.patientProfileImage ?? null,
-
-    type,
-    status: deriveUiStatus(raw.status, startMs, endMs, now),
-    storedStatus: raw.status,
-
+    type: raw.type ?? "video",
+    status: uiStatus,
+    storedStatus,
     startTime: new Date(startMs).toISOString(),
     endTime: new Date(endMs).toISOString(),
-    durationMinutes: durationMins,
-
-    reason: raw.reason || "",
-    location: raw.address || raw.location || undefined,
-
-    consultType: raw.consultType ?? "online",
+    durationMinutes: Math.round((endMs - startMs) / 60_000),
+    reason: raw.reason ?? "",
+    location: raw.location ?? undefined,
+    consultType: raw.consultType === "inPerson" ? "inPerson" : "online",
     amount: raw.amount ?? null,
     paymentReference: raw.paymentReference ?? null,
     rating: raw.rating ?? null,
     comment: raw.comment ?? null,
-
-    source: raw.source ?? "patient_booking",
-    hasMessages,
-    createdAt: raw.createdAt,
+    source:
+      raw.source === "patient_booking" ? "patient_booking" : "medic_created",
+    hasMessages: !!lastMsg,
+    lastMessageAt: lastMsg?.at ?? null,
+    lastMessageSenderRole: lastMsg?.senderRole ?? null,
+    lastMessagePreview: lastMsg?.preview ?? null,
+    createdAt: raw.createdAt ?? new Date(startMs).toISOString(),
   };
 }
 
-// ─── GET — medic's appointment list ──────────────────
+// ─── GET ─────────────────────────────────────────────
 export async function GET(request: NextRequest) {
   const uid = await verifySessionCookie(request);
   if (!uid) {
@@ -120,31 +188,43 @@ export async function GET(request: NextRequest) {
       .ref(`${MEDICS_NODE}/${uid}/appointments`)
       .once("value");
     const val = snap.val();
-    const raw = val ? (Array.isArray(val) ? val : Object.values(val)) : [];
+    if (!val) {
+      return NextResponse.json({ success: true, data: [] });
+    }
 
-    const now = Date.now();
-    const enriched = await Promise.all(
-      (raw as any[]).map(async (apt) => {
-        if (!apt?.id) return null;
-        // Only hit the chat node for appointments that actually have a chat
-        // (i.e. patient bookings). Medic-created appointments have no chat.
-        const hasMsgs =
-          apt.source === "patient_booking"
-            ? await hasChatMessages(apt.id)
-            : false;
-        return toUiAppointment(apt, now, hasMsgs);
-      }),
+    const rawList: any[] = Array.isArray(val)
+      ? val
+      : Object.entries(val).map(([k, v]: any) => ({
+          ...(v as any),
+          id: (v as any)?.id || k,
+        }));
+
+    // Fetch chat meta + last message for every appointment in parallel.
+    const chatInfos = await Promise.all(
+      rawList.map((r) =>
+        r?.id
+          ? getChatInfo(r.id)
+          : Promise.resolve({
+              patientId: null as string | null,
+              lastMessage: null as LastMessageInfo,
+            }),
+      ),
     );
 
-    return NextResponse.json({
-      success: true,
-      data: enriched.filter(Boolean),
+    const now = Date.now();
+    const data = rawList.map((r, i) => {
+      const info = chatInfos[i];
+      const patientId = resolvePatientId(r, info.patientId);
+      return toUiAppointment(r, now, info.lastMessage, patientId);
     });
+
+    return NextResponse.json({ success: true, data });
   } catch (err: any) {
     logger.error({
       uid,
-      message: "GET medic appointments failed",
+      message: "GET /api/medic/appointments failed",
       errorMessage: err?.message,
+      errorStack: err?.stack,
     });
     return NextResponse.json(
       { success: false, error: "Unable to load appointments" },
@@ -153,7 +233,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// ─── POST — medic creates their own appointment ──────
+// ─── POST (unchanged) ─────────────────────────────────
 export async function POST(request: NextRequest) {
   const uid = await verifySessionCookie(request);
   if (!uid) {
@@ -170,73 +250,59 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: "Invalid appointment data",
+          error: "Invalid appointment",
           details: parsed.error.flatten(),
         },
         { status: 400 },
       );
     }
 
-    const d = parsed.data;
-    const [h, m] = d.time.split(":").map(Number);
-    const [y, mo, day] = d.date.split("-").map(Number);
-    const start = new Date(y, mo - 1, day, h, m, 0, 0);
-    const startMs = start.getTime();
-    const endMs = startMs + d.durationMinutes * 60_000;
     const now = Date.now();
+    const id = `apt-${now}-${Math.random().toString(36).slice(2, 8)}`;
+    const startMs = new Date(
+      `${parsed.data.date}T${parsed.data.time}`,
+    ).getTime();
+    const endMs = startMs + parsed.data.durationMinutes * 60_000;
 
-    // If the medic picked a time that's already in the past, store it as
-    // completed so it doesn't flash as "upcoming" for a split second.
-    const storedStatus =
-      now >= endMs ? "completed" : now >= startMs ? "ongoing" : "upcoming";
-
-    const aptId = `apt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const record = {
-      id: aptId,
-      patientId: null,
-      patientName: d.patientName.trim(),
-      patientAge: d.patientAge ?? null,
-      patientProfileImage: null,
-
-      date: d.date,
-      time: d.time,
-      scheduledAt: start.toISOString(),
-      durationMinutes: d.durationMinutes,
-      duration: `${d.durationMinutes} min`,
-
-      type: d.type,
-      consultType:
-        d.type === "video" ? "online" : ("inPerson" as "online" | "inPerson"),
-      address: d.type === "home" ? d.location || null : null,
-
-      reason: d.reason.trim(),
+    const appointment = {
+      id,
+      patientName: parsed.data.patientName,
+      patientAge: parsed.data.patientAge ?? null,
+      type: parsed.data.type,
+      status: "upcoming",
+      scheduledAt: new Date(startMs).toISOString(),
+      date: parsed.data.date,
+      time: parsed.data.time,
+      duration: `${parsed.data.durationMinutes} min`,
+      durationMinutes: parsed.data.durationMinutes,
+      reason: parsed.data.reason,
+      location: parsed.data.location ?? null,
+      consultType: parsed.data.type === "video" ? "online" : "inPerson",
       amount: null,
       paymentReference: null,
-
-      status: storedStatus,
-      createdAt: new Date().toISOString(),
+      rating: null,
+      comment: null,
       source: "medic_created",
+      createdAt: new Date(now).toISOString(),
     };
 
-    const ref = adminDb.ref(`${MEDICS_NODE}/${uid}/appointments`);
-    const snap = await ref.once("value");
-    const val = snap.val();
-    const existing = val ? (Array.isArray(val) ? val : Object.values(val)) : [];
-    (existing as any[]).push(record);
-    await ref.set(existing);
+    await adminDb
+      .ref(`${MEDICS_NODE}/${uid}/appointments/${id}`)
+      .set(appointment);
 
     return NextResponse.json(
       {
         success: true,
-        data: toUiAppointment(record, now, false),
+        data: toUiAppointment(appointment, now, null, null),
       },
       { status: 201 },
     );
   } catch (err: any) {
     logger.error({
       uid,
-      message: "POST medic appointment failed",
+      message: "POST /api/medic/appointments failed",
       errorMessage: err?.message,
+      errorStack: err?.stack,
     });
     return NextResponse.json(
       { success: false, error: "Unable to create appointment" },
